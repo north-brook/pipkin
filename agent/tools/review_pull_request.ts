@@ -222,14 +222,15 @@ async function followUp(ctx: WorkflowToolContext, repo: Repo, context: PullReque
     FollowUp,
     renderFollowUp(context, open, changes),
   );
-  for (const entry of result?.results ?? []) {
+  if (!result) throw new Error("follow-up pass did not return a result");
+  for (const entry of result.results) {
     const finding = open[entry.index];
     if (finding && entry.fixed) fixed.add(finding.threadId);
   }
   return fixed;
 }
 
-const TRANSIENT = /overloaded|rate.?limit|timed? ?out|temporar|unavailable|ECONNRESET|socket hang up|\b5\d\d\b/i;
+const TRANSIENT = /overloaded|rate.?limit|timed? ?out|temporar|unavailable|ECONNRESET|socket hang up|\b(?:429|5\d\d)\b/i;
 const ATTEMPTS = 3;
 
 /** One structured turn with a subagent, retried with durable backoff when the model provider fails transiently. */
