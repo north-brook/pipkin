@@ -166,7 +166,7 @@ async function review(
   await tidyEarlierReviewsStep(repo, context.number, [...fixed]);
   const posted = await publishReviewStep(context, report, kept.map((entry) => entry.suggestionOk));
 
-  const conclusion: CheckConclusion = report.findings.length > 0 || stillOpen.length > 0 ? "neutral" : "success";
+  const conclusion: CheckConclusion = isIncomplete(report) || report.findings.length > 0 || stillOpen.length > 0 ? "neutral" : "success";
   await finishCheckStep(repo, checkId, conclusion, {
     title: checkTitle(report),
     summary: checkSummary(report, posted.url),
@@ -221,7 +221,7 @@ async function followUp(ctx: WorkflowToolContext, repo: Repo, context: PullReque
   return fixed;
 }
 
-const TRANSIENT = /overloaded|rate.?limit|timed? ?out|temporar|unavailable|ECONNRESET|socket hang up|5\d\d/i;
+const TRANSIENT = /overloaded|rate.?limit|timed? ?out|temporar|unavailable|ECONNRESET|socket hang up|\b5\d\d\b/i;
 const ATTEMPTS = 3;
 
 /** One structured turn with a subagent, retried with durable backoff when the model provider fails transiently. */

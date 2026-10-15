@@ -1,6 +1,6 @@
 import type { PullRequestContext } from "./context";
 import { inlineAnchor } from "./diff";
-import { botLogin, gh, graphql, repoPath, type Repo } from "./github";
+import { botLogin, gh, ghAll, graphql, repoPath, type Repo } from "./github";
 import { botName, botSlug } from "./identity";
 import {
   type EarlierFinding,
@@ -23,7 +23,7 @@ const THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $af
           path
           line
           originalLine
-          comments(first: 1) { nodes { url body author { login } } }
+          comments(first: 1) { nodes { url body author { login __typename } } }
         }
       }
     }
@@ -33,7 +33,7 @@ const THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $af
 const REVIEWS_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
-      reviews(last: 100) { nodes { id body isMinimized author { login } } }
+      reviews(last: 100) { nodes { id body isMinimized author { login __typename } } }
     }
   }
 }`;
@@ -49,7 +49,7 @@ interface ThreadsResponse {
           path: string;
           line: number | null;
           originalLine: number | null;
-          comments: { nodes: { url: string; body: string; author: { login: string } | null }[] };
+          comments: { nodes: { url: string; body: string; author: { login: string; __typename: string } | null }[] };
         }[];
       };
     };
@@ -57,12 +57,12 @@ interface ThreadsResponse {
 }
 
 interface ReviewsResponse {
-  repository: { pullRequest: { reviews: { nodes: { id: string; body: string; isMinimized: boolean; author: { login: string } | null }[] } } };
+  repository: { pullRequest: { reviews: { nodes: { id: string; body: string; isMinimized: boolean; author: { login: string; __typename: string } | null }[] } } };
 }
 
-function isPipkin(login: string | undefined) {
+function isPipkin(login: string | undefined, actorType: string | undefined) {
   const value = login?.toLowerCase();
-  return value === botSlug().toLowerCase() || value === botLogin().toLowerCase();
+  return actorType === "Bot" && (value === botSlug().toLowerCase() || value === botLogin().toLowerCase());
 }
 
 /** Every inline finding pipkin has posted on this pull request, resolved or not. */
@@ -74,7 +74,7 @@ export async function loadEarlierFindings(repo: Repo, number: number): Promise<E
     const threads = data.repository.pullRequest.reviewThreads;
     for (const thread of threads.nodes) {
       const first = thread.comments.nodes[0];
-      if (!first || !isPipkin(first.author?.login)) continue;
+      if (!first || !isPipkin(first.author?.login, first.author?.__typename)) continue;
       // Older reviews predate the finding marker; any root comment pipkin wrote is a finding.
       const parsed = parseInlineBody(first.body);
       findings.push({
@@ -98,7 +98,7 @@ export async function loadEarlierFindings(repo: Repo, number: number): Promise<E
 export async function lastReviewedHead(repo: Repo, number: number) {
   const data = await graphql<ReviewsResponse>(repo, REVIEWS_QUERY, { owner: repo.owner, repo: repo.repo, number });
   const heads = data.repository.pullRequest.reviews.nodes
-    .filter((review) => isPipkin(review.author?.login))
+    .filter((review) => isPipkin(review.author?.login, review.author?.__typename))
     .map((review) => new RegExp(`${REVIEW_MARKER} head=([0-9a-f]{40})`).exec(review.body)?.[1])
     .filter((head): head is string => head !== undefined);
   return heads.at(-1) ?? null;
@@ -134,7 +134,7 @@ export async function minimizeEarlierReviews(repo: Repo, number: number) {
   const data = await graphql<ReviewsResponse>(repo, REVIEWS_QUERY, { owner: repo.owner, repo: repo.repo, number });
   for (const review of data.repository.pullRequest.reviews.nodes) {
     // Replies in review threads also create reviews, with an empty body; leave those alone.
-    if (review.isMinimized || !isPipkin(review.author?.login) || review.body.trim() === "") continue;
+    if (review.isMinimized || !isPipkin(review.author?.login, review.author?.__typename) || review.body.trim() === "") continue;
     try {
       await graphql(repo, `mutation($id: ID!) { minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) { minimizedComment { isMinimized } } }`, { id: review.id });
     } catch (error) {
@@ -208,13 +208,12 @@ export async function publishReview(context: PullRequestContext, report: ReviewR
  * publish would block every later review, so clear pipkin's before starting.
  */
 async function deletePendingReviews(repo: Repo, number: number) {
-  const reviews = await gh<{ id: number; state: string; user: { login: string } | null }[]>(
+  const reviews = await ghAll<{ id: number; state: string; user: { login: string; type: string } | null }>(
     repo,
-    "GET",
-    `${repoPath(repo)}/pulls/${number}/reviews?per_page=100`,
+    `${repoPath(repo)}/pulls/${number}/reviews`,
   );
   for (const review of reviews) {
-    if (review.state === "PENDING" && isPipkin(review.user?.login)) {
+    if (review.state === "PENDING" && isPipkin(review.user?.login, review.user?.type)) {
       await gh(repo, "DELETE", `${repoPath(repo)}/pulls/${number}/reviews/${review.id}`);
     }
   }
