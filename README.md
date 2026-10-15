@@ -64,13 +64,14 @@ Mention `@pipkin` in a PR comment to ask a question about a finding, or ask it t
 
    On Linux, run `npx eve build && npx eve start --port 4318` under your process manager with the same environment.
 
-5. **Expose the webhook route.** Forward both `/eve/` and `/.well-known/workflow/` to the service. With Tailscale Funnel:
+5. **Expose the webhook route.** Only `/eve/v1/github` needs to be public; it verifies GitHub's webhook signature. Everything else (sessions, workflow callbacks) stays on loopback. With Tailscale Funnel, which needs the `funnel` node attribute in your tailnet policy:
 
    ```bash
-   tailscale funnel --bg --set-path /eve http://127.0.0.1:4318/eve
+   tailscale funnel --bg --yes --https=10000 \
+     --set-path=/eve/v1/github http://127.0.0.1:4318/eve/v1/github
    ```
 
-   Only `/eve/v1/github` needs to be public; it verifies GitHub's webhook signature.
+   Your webhook URL is then `https://<machine>.<tailnet>.ts.net:10000/eve/v1/github`. Funnel serves on ports 443, 8443 and 10000; pick one your other services don't use.
 
 ## Configuration
 
