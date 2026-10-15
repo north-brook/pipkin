@@ -13,6 +13,7 @@ pipkin is a GitHub pull request review bot built on the eve framework. An eve ag
 ## On GitHub
 
 - The `pipkin` check never concludes `failure` for findings: success when clean, neutral with findings or open earlier findings, neutral with a "Review failed" title when the run errors.
+- Follow-up reviews only look for new problems in the changes since pipkin's last complete review, never re-raise a finding someone replied to, need a higher score from the third review on, and post at most a few findings as threads (the rest are listed in the summary).
 - Inline comments carry a `<!-- pipkin:finding axis=… -->` marker and complete summaries a `<!-- pipkin:review head=<sha> -->` marker. Later reviews read these to skip repeats, resolve fixed threads and avoid re-reviewing a head; keep them stable.
 
 ## eve docs

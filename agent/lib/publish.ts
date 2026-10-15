@@ -23,7 +23,7 @@ const THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $af
           path
           line
           originalLine
-          comments(first: 1) { nodes { url body state author { login __typename } } }
+          comments(first: 30) { nodes { url body state author { login __typename } } }
         }
       }
     }
@@ -77,6 +77,11 @@ export async function loadEarlierFindings(repo: Repo, number: number): Promise<E
       if (!first || first.state !== "SUBMITTED" || !isPipkin(first.author?.login, first.author?.__typename)) continue;
       // Older reviews predate the finding marker; any root comment pipkin wrote is a finding.
       const parsed = parseInlineBody(first.body);
+      // What people said back. Bots, pipkin included, are not a verdict on the finding.
+      const replies = thread.comments.nodes
+        .slice(1)
+        .filter((comment) => comment.state === "SUBMITTED" && comment.author?.__typename !== "Bot" && comment.body.trim() !== "")
+        .map((comment) => ({ author: comment.author?.login ?? "ghost", body: comment.body.trim() }));
       findings.push({
         threadId: thread.id,
         url: first.url,
@@ -86,6 +91,7 @@ export async function loadEarlierFindings(repo: Repo, number: number): Promise<E
         body: parsed.text,
         axis: parsed.axis,
         resolved: thread.isResolved,
+        replies,
       });
     }
     if (!threads.pageInfo.hasNextPage) break;
@@ -94,22 +100,34 @@ export async function loadEarlierFindings(repo: Repo, number: number): Promise<E
   return findings;
 }
 
-/** The head commit of pipkin's latest complete review, or null when it has not reviewed this pull request. */
+/**
+ * The head commit of pipkin's latest complete review (null when it has not
+ * reviewed this pull request), and how many complete reviews it has posted.
+ */
 export async function lastReviewedHead(repo: Repo, number: number) {
   const data = await graphql<ReviewsResponse>(repo, REVIEWS_QUERY, { owner: repo.owner, repo: repo.repo, number });
   const heads = data.repository.pullRequest.reviews.nodes
     .filter((review) => isPipkin(review.author?.login, review.author?.__typename))
     .map((review) => new RegExp(`${REVIEW_MARKER} head=([0-9a-f]{40})`).exec(review.body)?.[1])
     .filter((head): head is string => head !== undefined);
-  return heads.at(-1) ?? null;
+  return { head: heads.at(-1) ?? null, count: heads.length };
 }
 
-/** The diff between two commits, for the follow-up check. Null when GitHub cannot compare them (e.g. after a force-push). */
+/** GitHub's compare endpoint lists at most this many files; a longer list may be missing some. */
+const COMPARE_FILE_LIMIT = 300;
+
+/**
+ * The changes between two commits: each file's patch (null when GitHub omits it)
+ * and a combined diff for prompts, cut at maxChars. Null when GitHub cannot
+ * compare them (e.g. after a force-push) or the file list may be incomplete.
+ */
 export async function compareCommits(repo: Repo, base: string, head: string, maxChars: number) {
   try {
     const comparison = await gh<{ files?: { filename: string; patch?: string }[] }>(repo, "GET", `${repoPath(repo)}/compare/${base}...${head}`);
-    const diff = (comparison.files ?? []).map((file) => `diff --git a/${file.filename} b/${file.filename}\n${file.patch ?? "(binary or too large to display)"}`).join("\n");
-    return diff.slice(0, maxChars);
+    const files = (comparison.files ?? []).map((file) => ({ path: file.filename, patch: file.patch ?? null }));
+    if (files.length >= COMPARE_FILE_LIMIT) return null;
+    const diff = files.map((file) => `diff --git a/${file.path} b/${file.path}\n${file.patch ?? "(binary or too large to display)"}`).join("\n");
+    return { files, diff: diff.slice(0, maxChars), truncated: diff.length > maxChars };
   } catch {
     return null;
   }
