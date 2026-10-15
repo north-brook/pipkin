@@ -57,14 +57,15 @@ export default defineWorkflowTool({
     // 1. Eligibility.
     const context = await loadPullRequestStep(repo, input.pullRequestNumber);
     if (!input.force && (context.state !== "open" || context.draft)) return { posted: false, reason: `pull request is ${context.draft ? "a draft" : context.state}` };
-    const previousHead = await lastReviewedHeadStep(repo, context.number);
-    if (!input.force && previousHead === context.headSha) return { posted: false, reason: "this head commit was already reviewed" };
-
-    const checkId = await startCheckStep(repo, context.headSha, context.url, "Reviewing…", "Reading the pull request.");
+    let checkId: number | null = null;
     try {
+      const previousHead = await lastReviewedHeadStep(repo, context.number);
+      if (!input.force && previousHead === context.headSha) return { posted: false, reason: "this head commit was already reviewed" };
+      checkId = await startCheckStep(repo, context.headSha, context.url, "Reviewing…", "Reading the pull request.");
       return await review(ctx, repo, context, previousHead, checkId, input.force);
     } catch (error) {
       // Leave the head unmarked so the next push or mention retries it.
+      if (checkId === null) checkId = await startCheckStep(repo, context.headSha, context.url, "Review failed", "The review could not finish.");
       await finishCheckStep(repo, checkId, "neutral", {
         title: "Review failed",
         summary: `pipkin could not finish this review: ${error instanceof Error ? error.message : String(error)}\n\nIt will try again on the next push. Re-run this check or comment to retry sooner.`,
@@ -138,26 +139,20 @@ async function review(
   const verified = withSuggestions
     .map(({ finding }, index) => ({ finding: { ...finding, score: scores[index]?.score ?? 0 } as ScoredFinding, suggestionOk: scores[index]?.suggestionOk === true }))
     .filter(({ finding }) => finding.score >= MIN_SCORE);
-  const stillOpen = open.filter((finding) => !fixed.has(finding.threadId));
-  const kept = await merge(ctx, verified, stillOpen);
   const dropped = candidates.length - verified.length - unverified.length;
 
   // 6. Recheck eligibility, then post one review and settle the check.
-  const latest = await loadPullRequestStep(repo, context.number);
-  if (latest.headSha !== context.headSha) {
-    await finishCheckStep(repo, checkId, "cancelled", { title: "Superseded", summary: "A newer commit was pushed during the review." });
-    return { posted: false, reason: "a newer commit was pushed during the review" };
-  }
-  if (!force && (latest.state !== "open" || latest.draft)) {
-    await finishCheckStep(repo, checkId, "cancelled", { title: "Cancelled", summary: "The pull request was closed or moved to draft during the review." });
-    return { posted: false, reason: "pull request closed or moved to draft during the review" };
-  }
-
+  const beforeCleanup = await publishBlocker(repo, context, checkId, force);
+  if (beforeCleanup) return { posted: false, reason: beforeCleanup };
   const resolved = new Set(await tidyEarlierReviewsStep(repo, context.number, [...fixed]));
+  const stillOpen = open.filter((finding) => !resolved.has(finding.threadId));
+  const kept = await merge(ctx, verified, stillOpen);
+  const beforePublish = await publishBlocker(repo, context, checkId, force);
+  if (beforePublish) return { posted: false, reason: beforePublish };
   const report: ReviewReport = {
     summary: triage.summary,
     findings: kept.map((entry) => entry.finding),
-    stillOpen: open.filter((finding) => !resolved.has(finding.threadId)),
+    stillOpen,
     fixed: open.filter((finding) => resolved.has(finding.threadId)),
     ranReviewers: ran.filter((reviewer) => !failedReviewers.includes(reviewer)),
     failedReviewers,
@@ -185,6 +180,20 @@ async function review(
   };
 }
 
+/** Stops cleanup or publication if the reviewed head is no longer eligible. */
+async function publishBlocker(repo: Repo, context: PullRequestContext, checkId: number | null, force: boolean) {
+  const latest = await loadPullRequestStep(repo, context.number);
+  if (latest.headSha !== context.headSha) {
+    await finishCheckStep(repo, checkId, "cancelled", { title: "Superseded", summary: "A newer commit was pushed during the review." });
+    return "a newer commit was pushed during the review";
+  }
+  if (!force && (latest.state !== "open" || latest.draft)) {
+    await finishCheckStep(repo, checkId, "cancelled", { title: "Cancelled", summary: "The pull request was closed or moved to draft during the review." });
+    return "pull request closed or moved to draft during the review";
+  }
+  return null;
+}
+
 function checkSummary(report: ReviewReport, reviewUrl: string) {
   const lines = [`**${headline(report)}.** [Read the review](${reviewUrl}).`, "", report.summary.trim()];
   if (report.fixed.length > 0) lines.push("", `Resolved ${report.fixed.length} earlier finding${report.fixed.length === 1 ? "" : "s"} this push fixed.`);
@@ -205,8 +214,8 @@ function withReplacedLines(finding: Finding & { reviewer: Reviewer }, patch: str
 /** Which of pipkin's open earlier findings this head commit fixed. */
 async function followUp(ctx: WorkflowToolContext, repo: Repo, context: PullRequestContext, previousHead: string | null, open: readonly EarlierFinding[]) {
   const fixed = new Set<string>();
-  if (open.length === 0 || previousHead === context.headSha) return fixed;
-  const changes = previousHead === null ? null : await compareCommitsStep(repo, previousHead, context.headSha);
+  if (open.length === 0) return fixed;
+  const changes = previousHead === null || previousHead === context.headSha ? null : await compareCommitsStep(repo, previousHead, context.headSha);
   const result = await ask(
     ctx,
     "followup",
