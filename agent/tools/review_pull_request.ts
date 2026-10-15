@@ -10,7 +10,7 @@ import {
   renderRulesFiles,
   renderSpec,
 } from "../lib/prompts";
-import { type Finding, Findings, type Reviewer, Score, Triage } from "../lib/schemas";
+import { type Finding, Findings, Groups, type Reviewer, Score, Triage } from "../lib/schemas";
 import { alreadyReviewedStep, loadExtrasStep, loadPullRequestStep, publishReviewStep, resolveInstallationStep } from "../lib/steps";
 import { renderSummary, type ScoredFinding } from "../lib/summary";
 
@@ -78,10 +78,11 @@ export default defineWorkflowTool({
       ),
     );
     const unverified = candidates.filter((_, index) => scores[index] === undefined);
-    const kept: ScoredFinding[] = candidates
+    const verified: ScoredFinding[] = candidates
       .map((finding, index) => ({ ...finding, score: scores[index]?.score ?? 0 }))
       .filter((finding) => finding.score >= MIN_SCORE);
-    const dropped = candidates.length - kept.length - unverified.length;
+    const kept = await merge(ctx, verified);
+    const dropped = candidates.length - verified.length - unverified.length;
 
     // 5. Recheck eligibility, then post one review.
     const latest = await loadPullRequestStep(repo, input.pullRequestNumber);
@@ -110,9 +111,8 @@ async function ask<T>(ctx: WorkflowToolContext, agent: string, schema: z.ZodType
   return result.status === "failed" ? undefined : (result.data as T | undefined);
 }
 
-// Reviewers overlap (a spec gap is often also a bug). Keep one finding per
-// anchored line, in reviewer priority order: bugs before spec before
-// standards, so one problem is reported once under its most specific axis.
+// Order findings bugs first, so when the merge step treats two as equal the
+// most specific axis wins. Exact repeats from one reviewer are dropped here.
 const PRIORITY: readonly Reviewer[] = ["bugs", "history", "comments", "spec", "rules", "precedent"];
 
 function dedupe<T extends Finding & { reviewer: Reviewer }>(findings: T[]) {
@@ -120,9 +120,30 @@ function dedupe<T extends Finding & { reviewer: Reviewer }>(findings: T[]) {
   return [...findings]
     .sort((a, b) => PRIORITY.indexOf(a.reviewer) - PRIORITY.indexOf(b.reviewer))
     .filter((finding) => {
-      const key = `${finding.path}:${finding.line}`;
+      const key = `${finding.reviewer}:${finding.path}:${finding.line}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+}
+
+/** Collapses findings from different reviewers that describe the same problem. */
+async function merge(ctx: WorkflowToolContext, findings: ScoredFinding[]) {
+  if (findings.length < 2) return findings;
+  const list = findings
+    .map((finding, index) => `${index}. [${finding.reviewer}] ${finding.path}:${finding.line} ${finding.title}\n   ${finding.body}`)
+    .join("\n");
+  const result = await ask(ctx, "merge", Groups, `Findings:\n\n${list}`);
+  if (!result) return findings;
+  const keep = new Set<number>();
+  const covered = new Set<number>();
+  for (const group of result.groups) {
+    const members = group.members.filter((index) => index >= 0 && index < findings.length && !covered.has(index));
+    if (members.length === 0) continue;
+    for (const index of members) covered.add(index);
+    keep.add(members.includes(group.keep) ? group.keep : Math.min(...members));
+  }
+  // Anything the merge step left out is kept rather than silently lost.
+  findings.forEach((_, index) => covered.has(index) || keep.add(index));
+  return findings.filter((_, index) => keep.has(index));
 }

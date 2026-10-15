@@ -1,6 +1,6 @@
 # pipkin
 
-A small, sharp-eyed code review bot for GitHub pull requests. Self-hosted, built on [eve](https://eve.dev), and powered by the ChatGPT subscription you already pay for through Codex.
+A small, sharp-eyed code review bot for GitHub pull requests. Self-hosted, built on [eve](https://eve.dev), and powered by a swarm of GPT-6.1 Sol agents billed to the ChatGPT subscription you already pay for through Codex.
 
 pipkin would rather say nothing than post a false alarm. Every candidate finding is scored by an independent verifier, and only high-confidence issues reach your pull request.
 
@@ -19,7 +19,8 @@ On every opened, reopened, ready-for-review, or pushed pull request:
    | `precedent` | Feedback from earlier PRs on the same files that applies again | Standards |
    | `spec` | Gaps against the PR description and linked issues (runs only when a spec exists) | Spec |
 3. **Verification**: a separate verifier scores each candidate 0–100. Anything under 80 is dropped.
-4. **One review**: a single GitHub review with inline comments and a short summary grouped by axis. Bugs, Standards, and Spec stay separate so one axis can't hide another.
+4. **Merge**: findings from different reviewers that describe the same problem are collapsed into one.
+5. **One review**: a single GitHub review with inline comments and a short summary grouped by axis. Bugs, Standards, and Spec stay separate so one axis can't hide another.
 
 Mention `@pipkin` in a PR comment to ask a question about a finding, or ask it to `review again`.
 
@@ -75,8 +76,7 @@ Mention `@pipkin` in a PR comment to ask a question about a finding, or ask it t
 
 | Variable | Default | |
 |---|---|---|
-| `PIPKIN_REVIEW_MODEL` | `gpt-6.1-sol` | Model for the six reviewers |
-| `PIPKIN_TRIAGE_MODEL` | `gpt-6-luna` | Model for triage and verification |
+| `PIPKIN_MODEL` | `gpt-6.1-sol` | Model for every pass (triage, reviewers, verifier) |
 | `PIPKIN_MIN_SCORE` | `80` | Verifier score a finding needs to be posted |
 | `PIPKIN_DRY_RUN` | unset | `1` logs reviews instead of posting them |
 | `PIPKIN_ADMIN_PASSWORD` | unset | Enables `eve remote connect` with user `pipkin` |

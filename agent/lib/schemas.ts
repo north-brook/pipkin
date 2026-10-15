@@ -23,6 +23,10 @@ export const Triage = z.object({
   summary: z.string(),
 });
 
+export const Groups = z.object({
+  groups: z.array(z.object({ members: z.array(z.number().int()), keep: z.number().int() })),
+});
+
 export const AXES = {
   bugs: "Bugs",
   history: "Bugs",

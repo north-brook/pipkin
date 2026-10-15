@@ -1,9 +1,9 @@
 import { defineAgent } from "eve";
-import { reviewModel } from "../../lib/models";
+import { model } from "../../lib/models";
 
 export default defineAgent({
   description: "Checks whether a pull request implements what its originating issue or spec asked for.",
-  model: reviewModel(),
+  model: model(),
   reasoning: "high",
   defaultTools: false,
   tool: false,

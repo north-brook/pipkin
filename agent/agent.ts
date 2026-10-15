@@ -1,8 +1,8 @@
 import { defineAgent } from "eve";
-import { reviewModel } from "./lib/models";
+import { model } from "./lib/models";
 
 export default defineAgent({
-  model: reviewModel(),
+  model: model(),
   reasoning: "high",
   // pipkin talks to GitHub through its own tools; it never needs a shell,
   // web access, or a copy of itself.
