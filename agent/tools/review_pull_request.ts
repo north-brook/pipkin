@@ -157,6 +157,7 @@ async function review(
     ranReviewers: ran.filter((reviewer) => !failedReviewers.includes(reviewer)),
     failedReviewers,
     unverified: unverified.length,
+    truncated: context.truncated,
     dropped,
     rereview: previousHead !== null || earlier.length > 0,
   };
@@ -197,7 +198,7 @@ async function publishBlocker(repo: Repo, context: PullRequestContext, checkId: 
 function checkSummary(report: ReviewReport, reviewUrl: string) {
   const lines = [`**${headline(report)}.** [Read the review](${reviewUrl}).`, "", report.summary.trim()];
   if (report.fixed.length > 0) lines.push("", `Resolved ${report.fixed.length} earlier finding${report.fixed.length === 1 ? "" : "s"} this push fixed.`);
-  if (isIncomplete(report)) lines.push("", "Some passes did not finish, so this review is incomplete. pipkin will try again on the next push.");
+  if (isIncomplete(report)) lines.push("", "This review is incomplete. pipkin will try again on the next push.");
   lines.push("", "pipkin never fails this check for findings; it reports them for a person to judge.");
   return lines.join("\n");
 }

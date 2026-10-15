@@ -40,6 +40,8 @@ export interface ReviewReport {
   readonly ranReviewers: readonly Reviewer[];
   readonly failedReviewers: readonly Reviewer[];
   readonly unverified: number;
+  /** Some of the diff was omitted from the review context. */
+  readonly truncated: boolean;
   readonly dropped: number;
   /** pipkin reviewed an earlier commit of this pull request. */
   readonly rereview: boolean;
@@ -62,7 +64,7 @@ function blobLink(context: PullRequestContext, finding: Finding) {
 }
 
 export function isIncomplete(report: ReviewReport) {
-  return report.failedReviewers.length > 0 || report.unverified > 0;
+  return report.truncated || report.failedReviewers.length > 0 || report.unverified > 0;
 }
 
 export function headline(report: ReviewReport) {
