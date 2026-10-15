@@ -10,6 +10,7 @@ import {
   FALSE_POSITIVES,
   FINDING_INSTRUCTIONS,
   SMELL_BASELINE,
+  renderFollowUp,
   renderPullRequest,
   renderRulesFiles,
   renderSpec,
@@ -152,21 +153,21 @@ async function review(
     return { posted: false, reason: "pull request closed or moved to draft during the review" };
   }
 
+  const resolved = new Set(await tidyEarlierReviewsStep(repo, context.number, [...fixed]));
   const report: ReviewReport = {
     summary: triage.summary,
     findings: kept.map((entry) => entry.finding),
-    stillOpen,
-    fixed: open.filter((finding) => fixed.has(finding.threadId)),
+    stillOpen: open.filter((finding) => !resolved.has(finding.threadId)),
+    fixed: open.filter((finding) => resolved.has(finding.threadId)),
     ranReviewers: ran.filter((reviewer) => !failedReviewers.includes(reviewer)),
     failedReviewers,
     unverified: unverified.length,
     dropped,
     rereview: previousHead !== null || earlier.length > 0,
   };
-  await tidyEarlierReviewsStep(repo, context.number, [...fixed]);
   const posted = await publishReviewStep(context, report, kept.map((entry) => entry.suggestionOk));
 
-  const conclusion: CheckConclusion = isIncomplete(report) || report.findings.length > 0 || stillOpen.length > 0 ? "neutral" : "success";
+  const conclusion: CheckConclusion = isIncomplete(report) || report.findings.length > 0 || report.stillOpen.length > 0 ? "neutral" : "success";
   await finishCheckStep(repo, checkId, conclusion, {
     title: checkTitle(report),
     summary: checkSummary(report, posted.url),
@@ -178,7 +179,7 @@ async function review(
     findings: report.findings.length,
     inlineComments: posted.inlineComments,
     resolvedEarlier: report.fixed.length,
-    stillOpen: stillOpen.length,
+    stillOpen: report.stillOpen.length,
     filtered: dropped,
     failedReviewers,
   };
@@ -197,22 +198,20 @@ function withReplacedLines(finding: Finding & { reviewer: Reviewer }, patch: str
   if (finding.suggestion === null) return { finding, replacedLines: null };
   const start = finding.startLine ?? finding.line;
   const replacedLines = start <= finding.line && finding.line - start < MAX_SUGGESTION_LINES ? newSideText(patch, start, finding.line) : null;
-  if (replacedLines === null || finding.suggestion.split("\n").length > MAX_SUGGESTION_LINES * 2) return { finding: { ...finding, suggestion: null }, replacedLines: null };
+  if (replacedLines === null || finding.suggestion.split("\n").length > MAX_SUGGESTION_LINES) return { finding: { ...finding, suggestion: null }, replacedLines: null };
   return { finding, replacedLines };
 }
 
 /** Which of pipkin's open earlier findings this head commit fixed. */
 async function followUp(ctx: WorkflowToolContext, repo: Repo, context: PullRequestContext, previousHead: string | null, open: readonly EarlierFinding[]) {
   const fixed = new Set<string>();
-  if (open.length === 0 || previousHead === null || previousHead === context.headSha) return fixed;
-  const changes = await compareCommitsStep(repo, previousHead, context.headSha);
-  if (!changes) return fixed;
-  const list = open.map((finding, index) => `${index}. ${finding.path}:${finding.line ?? "?"} ${finding.title}\n   ${finding.body.replace(/\n+/g, " ")}`).join("\n");
+  if (open.length === 0 || previousHead === context.headSha) return fixed;
+  const changes = previousHead === null ? null : await compareCommitsStep(repo, previousHead, context.headSha);
   const result = await ask(
     ctx,
     "followup",
     FollowUp,
-    `## Earlier findings still open\n\n${list}\n\n## Changes since pipkin's last review\n\n\`\`\`diff\n${changes}\n\`\`\`\n\n## Current pull request\n\n${renderPullRequest(context)}`,
+    renderFollowUp(context, open, changes),
   );
   for (const entry of result?.results ?? []) {
     const finding = open[entry.index];

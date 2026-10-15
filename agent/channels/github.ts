@@ -1,6 +1,5 @@
 import { defaultGitHubAuth, githubChannel } from "eve/channels/github";
-import { CHECK_EXTERNAL_ID, CHECK_NAME } from "../lib/checks";
-import { botName, botSlug } from "../lib/identity";
+import { botName, botSlug, CHECK_EXTERNAL_ID, CHECK_NAME } from "../lib/identity";
 
 const REVIEW_ACTIONS = new Set(["opened", "reopened", "ready_for_review", "synchronize"]);
 

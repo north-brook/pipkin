@@ -23,7 +23,7 @@ const THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $af
           path
           line
           originalLine
-          comments(first: 1) { nodes { url body author { login __typename } } }
+          comments(first: 1) { nodes { url body state author { login __typename } } }
         }
       }
     }
@@ -49,7 +49,7 @@ interface ThreadsResponse {
           path: string;
           line: number | null;
           originalLine: number | null;
-          comments: { nodes: { url: string; body: string; author: { login: string; __typename: string } | null }[] };
+          comments: { nodes: { url: string; body: string; state: string; author: { login: string; __typename: string } | null }[] };
         }[];
       };
     };
@@ -74,7 +74,7 @@ export async function loadEarlierFindings(repo: Repo, number: number): Promise<E
     const threads = data.repository.pullRequest.reviewThreads;
     for (const thread of threads.nodes) {
       const first = thread.comments.nodes[0];
-      if (!first || !isPipkin(first.author?.login, first.author?.__typename)) continue;
+      if (!first || first.state !== "SUBMITTED" || !isPipkin(first.author?.login, first.author?.__typename)) continue;
       // Older reviews predate the finding marker; any root comment pipkin wrote is a finding.
       const parsed = parseInlineBody(first.body);
       findings.push({
@@ -117,11 +117,11 @@ export async function compareCommits(repo: Repo, base: string, head: string, max
 
 /** Resolves the review threads of findings a newer commit fixed. Failures are skipped; the thread just stays open. */
 export async function resolveThreads(repo: Repo, threadIds: readonly string[]) {
-  let resolved = 0;
+  const resolved: string[] = [];
   for (const threadId of threadIds) {
     try {
       await graphql(repo, `mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }`, { id: threadId });
-      resolved++;
+      resolved.push(threadId);
     } catch (error) {
       console.warn(`[pipkin] could not resolve review thread ${threadId}:`, error);
     }

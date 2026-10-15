@@ -1,12 +1,9 @@
 import { gh, repoPath, type Repo } from "./github";
+import { CHECK_EXTERNAL_ID, CHECK_NAME } from "./identity";
 
 // The "pipkin" check run on a pull request's head commit. It shows progress
 // while a review runs, and its conclusion is never "failure" for findings:
 // pipkin informs, it does not gate merges.
-
-export const CHECK_NAME = "pipkin";
-/** Re-run requests from the checks UI carry this as the check run's external id. */
-export const CHECK_EXTERNAL_ID = "pipkin-review";
 
 export interface CheckOutput {
   readonly title: string;

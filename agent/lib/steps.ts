@@ -97,10 +97,11 @@ export async function tidyEarlierReviewsStep(repo: Repo, number: number, fixedTh
   "use step";
   if (dryRun()) {
     console.log(`[pipkin] dry run: would resolve ${fixedThreadIds.length} fixed thread(s) and minimize earlier summaries`);
-    return;
+    return fixedThreadIds;
   }
-  await resolveThreads(repo, fixedThreadIds);
+  const resolved = await resolveThreads(repo, fixedThreadIds);
   await minimizeEarlierReviews(repo, number).catch((error) => console.warn("[pipkin] could not minimize earlier reviews:", error));
+  return resolved;
 }
 
 export async function publishReviewStep(context: PullRequestContext, report: ReviewReport, suggestionOk: boolean[]) {

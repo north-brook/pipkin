@@ -1,4 +1,11 @@
 import type { PullRequestContext } from "./context";
+import type { EarlierFinding } from "./summary";
+
+/** Context for checking whether a later head fixed earlier findings. */
+export function renderFollowUp(context: PullRequestContext, open: readonly EarlierFinding[], changes: string | null) {
+  const list = open.map((finding, index) => `${index}. ${finding.path}:${finding.line ?? "?"} ${finding.title}\n   ${finding.body.replace(/\n+/g, " ")}`).join("\n");
+  return `## Earlier findings still open\n\n${list}\n\n## Changes since pipkin's last complete review\n\n${changes === null ? "No earlier complete review or comparison is available. Judge each finding against the current pull request." : `\`\`\`diff\n${changes}\n\`\`\``}\n\n## Current pull request\n\n${renderPullRequest(context)}`;
+}
 
 // The reviewer passes, false-positive list and confidence rubric are adapted
 // from Anthropic's Claude Code `code-review` plugin (Apache-2.0). The Spec axis

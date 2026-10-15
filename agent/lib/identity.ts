@@ -9,3 +9,7 @@ export function botName() {
 export function botSlug() {
   return process.env.GITHUB_APP_SLUG ?? "pipkin";
 }
+
+export const CHECK_NAME = "pipkin";
+/** Identifies check runs owned by pipkin when GitHub requests a re-run. */
+export const CHECK_EXTERNAL_ID = "pipkin-review";

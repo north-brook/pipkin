@@ -19,7 +19,7 @@ pipkin would rather say nothing than post a false alarm. Six narrow reviewers lo
 ## What it looks like
 
 - **One review per push.** Each finding is an inline comment on the line it is about, with a one-click suggested change when the fix is small and certain. The summary is a short verdict that links to each comment, grouped into Bugs, Standards and Spec.
-- **A `pipkin` check.** It shows progress while the review runs and links to the result. It concludes success when clean and neutral when there are findings, so pipkin informs without blocking merges. Re-run it from the Checks tab to review again.
+- **A `pipkin` check.** It shows progress while the review runs and links to the result. It concludes success when clean and neutral when there are findings or an incomplete review, so pipkin informs without blocking merges. Re-run it from the Checks tab to review again. For fork pull requests, GitHub may omit the check's pull request association, which eve requires for routing; comment `@pipkin-bot review` to re-run those reviews.
 - **Quiet follow-ups.** On a new push pipkin reviews again, resolves its own threads for findings the push fixed, does not repeat findings that are still open, and collapses its earlier summaries.
 - **Conversation.** Reply to a finding with `@pipkin` to ask about it or push back, or comment `@pipkin review` to run the review again.
 
