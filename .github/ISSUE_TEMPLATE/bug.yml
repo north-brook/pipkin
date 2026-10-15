@@ -1,0 +1,22 @@
+name: Bug report
+description: pipkin crashed, posted something broken, or missed its review.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Link the pull request or review if it is public, and say what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant lines from pipkin's log. Remove tokens and private code first.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: pipkin commit
+      placeholder: e.g. 6a86939

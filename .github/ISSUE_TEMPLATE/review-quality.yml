@@ -1,0 +1,22 @@
+name: Review quality
+description: A false positive, a duplicate, or an obvious bug pipkin missed.
+labels: [review-quality]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - False positive
+        - Duplicate finding
+        - Missed issue
+        - Unclear or badly placed comment
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example
+      description: The finding (or the code it missed), and why it is wrong. A minimal snippet is enough; do not paste private code.
+    validations:
+      required: true

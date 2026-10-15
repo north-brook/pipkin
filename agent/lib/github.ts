@@ -1,4 +1,5 @@
 import { createSign } from "node:crypto";
+import { botSlug } from "./identity";
 
 // Minimal GitHub App client. Credentials come from GITHUB_APP_ID and
 // GITHUB_APP_PRIVATE_KEY, the same env vars eve's GitHub channel reads.
@@ -48,9 +49,15 @@ export async function resolveInstallation(owner: string, repo: string): Promise<
   return ((await response.json()) as { id: number }).id;
 }
 
-/** The app's own bot login, e.g. "pipkin[bot]". */
+/** The app's own REST login, e.g. "pipkin[bot]". */
 export function botLogin() {
-  return `${process.env.GITHUB_APP_SLUG ?? "pipkin"}[bot]`;
+  return `${botSlug()}[bot]`;
+}
+
+export async function graphql<T>(repo: Repo, query: string, variables: Record<string, unknown>): Promise<T> {
+  const response = await gh<{ data?: T; errors?: { message: string }[] }>(repo, "POST", "/graphql", { query, variables });
+  if (response.errors?.length) throw new Error(`GitHub GraphQL: ${response.errors.map((error) => error.message).join("; ")}`);
+  return response.data as T;
 }
 
 export async function gh<T>(
