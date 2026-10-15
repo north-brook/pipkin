@@ -1,55 +1,30 @@
-# eve Agent App
+# pipkin
 
-This project uses the eve framework: an agent is a directory of files under `agent/`, and eve compiles and runs it.
+pipkin is a GitHub pull request review bot built on the eve framework. An eve agent is a directory of files under `agent/`; eve compiles and runs it.
 
-For a content-only change to the root agent's identity, purpose, tone, or response guidelines, edit its existing authored instructions. Fresh projects use `agent/instructions.md`; a project may instead use `agent/instructions.ts` or files under `agent/instructions/`. You do not need to read the framework docs for a content-only instructions change. A fresh project already has its selected model in `agent/agent.ts`; preserve that file unless the user asks to change the model.
+## Layout
 
-## Read the docs before writing code
+- `agent/agent.ts`, `agent/instructions.md`: the root agent. It only routes GitHub events to `review_pull_request` or answers follow-up questions.
+- `agent/channels/github.ts`: GitHub App webhook channel; decides which pull request events start a turn.
+- `agent/tools/review_pull_request.ts`: the review workflow (triage → parallel reviewers → verifier scoring → one GitHub review).
+- `agent/subagents/<name>/`: one reviewer per directory, with no tools. Each returns structured findings or a score.
+- `agent/lib/`: shared code. `steps.ts` holds every `"use step"` function; `summary.ts`, `prompts.ts` and `schemas.ts` are pure and safe to import from workflow bodies. Anything that touches the network or Node.js APIs (`github.ts`, `context.ts`, `publish.ts`) must only be reached through `steps.ts`.
 
-```sh
-ls node_modules/eve/docs
-```
+## eve docs
 
-Start with `docs/README.md`: it maps each task to the page that covers it. Read that page before authoring tools, connections, channels, skills, subagents, schedules, or deployment. In a workspace or local package install, resolve the installed `eve` package location first. If the package docs are missing, use https://eve.dev/docs.
+The eve docs ship in `node_modules/eve/docs/`; start with `README.md` there. Read the relevant page before changing tools, channels, subagents or the sandbox.
 
-Use a bounded authoring loop:
+## Rules
 
-1. Read the relevant page and inspect only files you will modify or need to imitate.
-2. Stop discovery once the file location, imports, and definition shape are clear. Implement the smallest complete behavior the user requested.
-3. Run one narrow verification. Expand investigation only when it fails or the request needs project-specific details.
+- Keep reviewer prompts in `agent/lib/prompts.ts` and the subagent `instructions.md` files. Material adapted from upstream projects must stay attributed in `NOTICE`.
+- Precision over recall: a change that makes pipkin noisier needs a reason.
+- Never commit secrets. Runtime secrets live in `~/.config/pipkin/env`.
 
-Follow links or inspect public types only when the routed page leaves the task unanswered. Do not recursively glob `node_modules`, enumerate the entire docs tree, or read unrelated scaffold files when the direct path is known. Package-manager links can hide files from recursive glob tools even though direct reads work.
-
-## Prefer an existing integration
-
-When a task names an external product or service, search the registry before implementing its integration. For a generic capability, author a tool instead.
+## Validate
 
 ```sh
-eve registry search <query> --json
-eve registry view <item>
+npm run typecheck
+npx eve build
 ```
 
-Prefer items whose `implementation` is `native`; use Chat SDK adapters when no native channel fits. `registry view` links the item's documentation.
-
-Install without driving interactive prompts:
-
-```sh
-eve add <item> --non-interactive
-```
-
-Exit code 0 means setup completed, 1 failed, and 2 needs an answer or a prerequisite. On exit 2, run the `next.command` from the final NDJSON event. For a non-secret question, replace its `<JSON value>` answer placeholder with the answer you collected; string values need JSON quotes. Never pass a secret in `--answer`. See `docs/install-integrations.mdx` for setup prerequisites.
-
-## Use eve for Vercel operations
-
-Use eve to link and deploy Vercel projects:
-
-```sh
-eve link --non-interactive --project <name-or-id> [--team <team-id-or-slug>]
-eve deploy --non-interactive --yes [--project <name-or-id>]
-```
-
-A setup may report `eve link` as a prerequisite; run it, then retry the continuation. When a completed setup event has `deploymentRequired: true`, run the `next` command it reports.
-
-## Validate the change
-
-Run the validation the task requests. When it does not establish the behavior you changed, run the narrowest relevant check.
+For behaviour changes, dry-run a review locally (see README, "Development").

@@ -1,15 +1,12 @@
 import { eveChannel } from "eve/channels/eve";
-import { localDev, placeholderAuth, vercelOidc } from "eve/channels/auth";
+import { httpBasic, localDev } from "eve/channels/auth";
+
+// The HTTP/TUI surface is for operators only: open on localhost during
+// `eve dev`, and behind Basic auth when PIPKIN_ADMIN_PASSWORD is set so
+// `eve remote connect` can reach a running host. GitHub traffic uses the
+// github channel, which verifies webhook signatures instead.
+const password = process.env.PIPKIN_ADMIN_PASSWORD;
 
 export default eveChannel({
-  auth: [
-    // Lets the eve TUI and your Vercel deployments reach the deployed agent.
-    vercelOidc(),
-    // Open on localhost for `eve dev` and the REPL; ignored in production.
-    localDev(),
-    // This placeholder will not allow browser requests in production.
-    // Replace it with your app's auth provider, like Auth.js or Clerk,
-    // or use none() for a public demo.
-    placeholderAuth(),
-  ],
+  auth: [localDev(), ...(password ? [httpBasic({ username: "pipkin", password })] : [])],
 });

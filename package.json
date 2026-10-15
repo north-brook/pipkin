@@ -25,7 +25,13 @@
     "typescript": "7.0.2"
   },
   "engines": {
-    "node": "24.x"
-  }
-
+    "node": ">=24"
+  },
+  "description": "A small, sharp-eyed code review bot for GitHub pull requests.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/north-brook/pipkin"
+  },
+  "private": true
 }

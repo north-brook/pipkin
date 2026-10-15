@@ -1,0 +1,47 @@
+pipkin
+Copyright 2026 Northbrook
+
+This product includes software developed by Northbrook and is licensed under
+the Apache License, Version 2.0 (see LICENSE).
+
+----------------------------------------------------------------------------
+
+Portions of agent/lib/prompts.ts and the reviewer passes under
+agent/subagents/ are adapted from the `code-review` plugin in
+anthropics/claude-plugins-official
+(https://github.com/anthropics/claude-plugins-official/tree/aecd4c852f10b466245f18383fa6aad8c0b10d57/plugins/code-review),
+Copyright Anthropic PBC, licensed under the Apache License, Version 2.0.
+
+Adapted material: the five review passes (rules files, bugs, git history,
+prior pull request comments, code comments), the false-positive list, and the
+0-100 confidence rubric with its 80 threshold.
+
+----------------------------------------------------------------------------
+
+The Spec reviewer (agent/subagents/spec/) and the smell baseline in
+agent/lib/prompts.ts are adapted from the `code-review` skill in
+mattpocock/skills
+(https://github.com/mattpocock/skills/tree/3da8c01116264675eeefbd6e9d59c734de9095cc/skills/engineering/code-review),
+licensed under the MIT License:
+
+  MIT License
+
+  Copyright (c) 2026 Matt Pocock
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
