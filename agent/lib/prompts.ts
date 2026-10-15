@@ -43,7 +43,8 @@ export const FINDING_INSTRUCTIONS = `Report each issue as one finding with:
 - startLine: optional, for a multi-line range ending at line.
 - title: one short sentence naming the problem, with no priority or severity tags.
 - body: why it is a problem and what to do instead, in at most 4 sentences. Quote the specific code. If a rules file or spec motivates it, quote the exact rule or requirement.
-- source: the rules file path or spec reference that motivates it, or null.
+- source: when the finding quotes a rule or requirement, where it comes from: the rules file path (for example AGENTS.md), "PR description", or "issue #N". Otherwise null. Never put code locations here.
+- suggestion: the exact replacement text for lines startLine..line (or just line), only when the fix is small, self-contained and you are certain of it. Give the complete new text of those lines with their original indentation, and nothing else. Use null when you are unsure or the fix reaches beyond those lines.
 Return an empty list when you find nothing worth reporting. Finding nothing is a normal, good outcome.`;
 
 export function renderPullRequest(context: PullRequestContext, options: { includeDiff?: boolean } = {}) {

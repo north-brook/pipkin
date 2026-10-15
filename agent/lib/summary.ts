@@ -1,60 +1,152 @@
 import type { PullRequestContext } from "./context";
 import { AXES, type Axis, type Finding, type Reviewer } from "./schemas";
 
-// Pure rendering of the review summary. Safe to import from workflow bodies.
+// Pure rendering of pipkin's review body, inline comments and check output.
+// Safe to import from workflow bodies.
 
-/** Marker embedded in every review pipkin posts, so reruns can tell a head was already reviewed. */
+/** Marker embedded in every complete review summary, recording the head commit it covers. */
 export const REVIEW_MARKER = "<!-- pipkin:review";
+/** Marker embedded in every inline comment, so later reviews can recognize pipkin's own findings. */
+export const FINDING_MARKER = "<!-- pipkin:finding";
+
+const AXIS_ORDER: readonly Axis[] = ["Bugs", "Standards", "Spec"];
 
 export interface ScoredFinding extends Finding {
   readonly reviewer: Reviewer;
   readonly score: number;
 }
 
+/** A finding pipkin posted in an earlier review of the same pull request. */
+export interface EarlierFinding {
+  readonly threadId: string;
+  readonly url: string;
+  readonly path: string;
+  readonly line: number | null;
+  readonly title: string;
+  readonly body: string;
+  readonly axis: Axis | null;
+  readonly resolved: boolean;
+}
+
+export interface ReviewReport {
+  /** Triage's 2-3 sentence summary of the change. */
+  readonly summary: string;
+  /** New findings, in the order they are posted. */
+  readonly findings: readonly ScoredFinding[];
+  /** Earlier findings that are still unresolved. */
+  readonly stillOpen: readonly EarlierFinding[];
+  /** Earlier findings that this head commit fixed. */
+  readonly fixed: readonly EarlierFinding[];
+  readonly ranReviewers: readonly Reviewer[];
+  readonly failedReviewers: readonly Reviewer[];
+  readonly unverified: number;
+  readonly dropped: number;
+  /** pipkin reviewed an earlier commit of this pull request. */
+  readonly rereview: boolean;
+}
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : word.endsWith("s") ? "es" : "s"}`;
+
+export function cleanTitle(title: string) {
+  return title.trim().replace(/\.$/, "");
+}
+
+function fileLabel(path: string, line: number | null) {
+  return `${path.split("/").pop()}${line === null ? "" : `:${line}`}`;
+}
+
 function blobLink(context: PullRequestContext, finding: Finding) {
-  const start = Math.max(1, (finding.startLine ?? finding.line) - 1);
-  return `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${context.headSha}/${finding.path}#L${start}-L${finding.line + 1}`;
+  const start = finding.startLine ?? finding.line;
+  const range = start === finding.line ? `L${start}` : `L${start}-L${finding.line}`;
+  return `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${context.headSha}/${finding.path}#${range}`;
 }
 
-export function inlineBody(finding: ScoredFinding) {
-  const source = finding.source ? `\n\n<sub>${AXES[finding.reviewer]} · ${finding.source}</sub>` : `\n\n<sub>${AXES[finding.reviewer]}</sub>`;
-  return `**${finding.title}**\n\n${finding.body}${source}`;
+export function isIncomplete(report: ReviewReport) {
+  return report.failedReviewers.length > 0 || report.unverified > 0;
 }
 
-export function renderSummary(input: {
-  context: PullRequestContext;
-  summary: string;
-  findings: readonly ScoredFinding[];
-  ranReviewers: readonly Reviewer[];
-  failedReviewers: readonly Reviewer[];
-  unverified: number;
-  dropped: number;
-}) {
-  const { context, summary, findings, ranReviewers, failedReviewers, unverified, dropped } = input;
-  const skippedSpec = !ranReviewers.includes("spec") && !failedReviewers.includes("spec");
-  const axes: Axis[] = ["Bugs", "Standards", "Spec"];
-  const lines = [`### pipkin review`, "", summary.trim(), ""];
-  if (findings.length === 0 && failedReviewers.length === 0 && unverified === 0) {
-    lines.push("No issues found. Checked for bugs, rules-file compliance, history, prior review feedback" + (ranReviewers.includes("spec") ? ", and the spec." : "."));
-  } else if (findings.length === 0) {
-    lines.push("No issues found in the passes that completed.");
-  } else {
-    lines.push(`Found ${findings.length} issue${findings.length === 1 ? "" : "s"}:`, "");
-    for (const axis of axes) {
-      const axisFindings = findings.filter((finding) => AXES[finding.reviewer] === axis);
-      if (axisFindings.length === 0) continue;
-      lines.push(`**${axis}**`, "");
-      axisFindings.forEach((finding, index) => {
-        lines.push(`${index + 1}. ${finding.title}${finding.source ? ` (${finding.source})` : ""}`, `   ${blobLink(context, finding)}`);
-      });
-      lines.push("");
-    }
+export function headline(report: ReviewReport) {
+  const count = report.findings.length;
+  if (count === 0) return report.rereview ? "No new issues" : "No issues found";
+  return `${plural(count, report.rereview ? "new issue" : "issue")} found`;
+}
+
+/** Short title for the check run, e.g. "2 issues found" or "No new issues · 1 still open". */
+export function checkTitle(report: ReviewReport) {
+  const parts = [headline(report)];
+  if (report.stillOpen.length > 0) parts.push(`${report.stillOpen.length} still open`);
+  if (isIncomplete(report)) parts.push("incomplete");
+  return parts.join(" · ");
+}
+
+/** The body of one inline review comment. */
+export function inlineBody(finding: ScoredFinding, withSuggestion: boolean) {
+  const parts = [`**${cleanTitle(finding.title)}**`, "", finding.body.trim()];
+  if (withSuggestion && finding.suggestion !== null) {
+    const fence = finding.suggestion.includes("```") ? "````" : "```";
+    parts.push("", `${fence}suggestion`, finding.suggestion, fence);
   }
-  if (failedReviewers.length > 0) lines.push(`<sub>This review is incomplete: the ${failedReviewers.join(", ")} pass${failedReviewers.length === 1 ? "" : "es"} failed. pipkin will retry on the next push, or mention it to re-run.</sub>`);
-  if (unverified > 0) lines.push(`<sub>${unverified} candidate${unverified === 1 ? " was" : "s were"} not posted because verification failed.</sub>`);
-  if (skippedSpec) lines.push("<sub>No spec found in the description or linked issues, so the Spec axis was skipped.</sub>");
-  if (dropped > 0) lines.push(`<sub>${dropped} lower-confidence candidate${dropped === 1 ? " was" : "s were"} filtered out.</sub>`);
-  if (context.truncated) lines.push("<sub>The diff was too large to review in full; later files were not reviewed.</sub>");
+  const axis = AXES[finding.reviewer];
+  parts.push("", `<sub>${[axis, finding.source].filter(Boolean).join(" · ")}</sub>`, `${FINDING_MARKER} axis=${axis} -->`);
+  return parts.join("\n");
+}
+
+/** Recovers the title, axis and text of one of pipkin's inline comments. */
+export function parseInlineBody(body: string): { title: string; axis: Axis | null; text: string } {
+  const title = /^\*\*(.+?)\*\*/.exec(body.trim())?.[1] ?? body.trim().split("\n")[0];
+  const axisName = /pipkin:finding axis=(\w+)/.exec(body)?.[1] ?? /<sub>(Bugs|Standards|Spec)\b/.exec(body)?.[1];
+  const axis = AXIS_ORDER.find((candidate) => candidate === axisName) ?? null;
+  const text = body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<sub>[\s\S]*?<\/sub>/g, "")
+    .replace(/^\s*\*\*.+?\*\*/, "")
+    .replace(/(`{3,})suggestion\n[\s\S]*?\n\1/g, "")
+    .trim();
+  return { title: cleanTitle(title), axis, text };
+}
+
+/**
+ * The review summary. `links[i]` is the inline comment for `report.findings[i]`;
+ * findings without one are shown in full here, since they have no thread.
+ */
+export function renderReview(context: PullRequestContext, report: ReviewReport, links: readonly (string | undefined)[], botName: string) {
+  const lines = [`### ${headline(report)}`, ""];
+  if (report.failedReviewers.length > 0) {
+    lines.push(`> [!NOTE]`, `> Incomplete review: the ${report.failedReviewers.join(", ")} pass${report.failedReviewers.length === 1 ? "" : "es"} failed. pipkin will try again on the next push.`, "");
+  }
+  lines.push(report.summary.trim(), "");
+
+  for (const axis of AXIS_ORDER) {
+    const entries = report.findings.map((finding, index) => ({ finding, link: links[index] })).filter(({ finding }) => AXES[finding.reviewer] === axis);
+    if (entries.length === 0) continue;
+    lines.push(`**${axis}**`, "");
+    for (const { finding, link } of entries) {
+      const where = `[\`${fileLabel(finding.path, finding.line)}\`](${blobLink(context, finding)})`;
+      const title = cleanTitle(finding.title);
+      lines.push(link ? `- [${title}](${link}) · ${where}` : `- **${title}** · ${where}`);
+      if (!link) lines.push("", ...finding.body.trim().split("\n").map((row) => `  ${row}`), "");
+    }
+    lines.push("");
+  }
+
+  if (report.stillOpen.length > 0) {
+    lines.push(`<details>`, `<summary>Still open from earlier reviews (${report.stillOpen.length})</summary>`, "");
+    for (const finding of report.stillOpen) lines.push(`- [${finding.title}](${finding.url}) · \`${fileLabel(finding.path, finding.line)}\``);
+    lines.push("", `</details>`, "");
+  }
+
+  const details: string[] = [];
+  const passes = report.ranReviewers.length > 0 ? `: ${report.ranReviewers.join(", ")}` : "";
+  details.push(`Reviewed \`${context.headSha.slice(0, 7)}\` with ${plural(report.ranReviewers.length, "pass")}${passes}.`);
+  if (report.fixed.length > 0) details.push(`Resolved ${plural(report.fixed.length, "earlier finding")} that this push fixed.`);
+  if (!report.ranReviewers.includes("spec") && !report.failedReviewers.includes("spec")) {
+    details.push("Skipped the spec pass: no description or linked issue to check against.");
+  }
+  if (report.dropped > 0) details.push(`Filtered out ${plural(report.dropped, "lower-confidence candidate")}.`);
+  if (report.unverified > 0) details.push(`Held back ${plural(report.unverified, "candidate")} that could not be verified.`);
+  if (context.truncated) details.push("The diff was too large to review in full; later files were not reviewed.");
+  lines.push(`<details>`, `<summary>Review details</summary>`, "", ...details.map((detail) => `- ${detail}`), "", `</details>`, "");
+
+  lines.push(`<sub>Reply with \`@${botName}\` to ask about a finding, or comment \`@${botName} review\` to run the review again.</sub>`);
   return lines.join("\n").trimEnd();
 }
-

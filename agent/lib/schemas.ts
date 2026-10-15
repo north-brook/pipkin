@@ -7,6 +7,7 @@ export const Finding = z.object({
   title: z.string(),
   body: z.string(),
   source: z.string().nullable(),
+  suggestion: z.string().nullable(),
 });
 export type Finding = z.infer<typeof Finding>;
 
@@ -15,6 +16,7 @@ export const Findings = z.object({ findings: z.array(Finding) });
 export const Score = z.object({
   reasoning: z.string(),
   score: z.number().int().min(0).max(100),
+  suggestionOk: z.boolean(),
 });
 
 export const Triage = z.object({
@@ -25,6 +27,10 @@ export const Triage = z.object({
 
 export const Groups = z.object({
   groups: z.array(z.object({ members: z.array(z.number().int()), keep: z.number().int() })),
+});
+
+export const FollowUp = z.object({
+  results: z.array(z.object({ index: z.number().int(), fixed: z.boolean(), reasoning: z.string() })),
 });
 
 export const AXES = {

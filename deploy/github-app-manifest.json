@@ -1,19 +1,21 @@
 {
   "name": "pipkin",
   "url": "https://github.com/north-brook/pipkin",
-  "description": "A small, sharp-eyed code review bot.",
+  "description": "A small, sharp-eyed code review bot for GitHub pull requests.",
   "public": false,
   "hook_attributes": {
     "url": "https://REPLACE_WITH_YOUR_HOST:10000/eve/v1/github",
     "active": true
   },
   "default_permissions": {
+    "checks": "write",
     "contents": "read",
     "issues": "read",
     "metadata": "read",
     "pull_requests": "write"
   },
   "default_events": [
+    "check_run",
     "issue_comment",
     "pull_request",
     "pull_request_review_comment"
