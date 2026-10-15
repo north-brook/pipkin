@@ -75,7 +75,7 @@ export function renderFollowUpScope(changes: string | null, discussed: readonly 
   if (changes !== null) {
     parts.push(`## This is a follow-up review
 
-pipkin already reviewed an earlier commit of this pull request. Report only problems in the changes since that review, shown below. Use the full diff above for context, but do not report anything about lines these changes did not touch: they were already reviewed.
+pipkin already reviewed an earlier commit of this pull request. Report only problems in the changes since that review, shown below. Use the full diff above for context, but do not report anything about lines these changes did not touch: they were already reviewed. A file whose patch is not shown changed in ways GitHub could not display; review it in full.
 
 \`\`\`diff
 ${changes}
