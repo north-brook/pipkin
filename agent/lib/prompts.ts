@@ -1,9 +1,21 @@
 import type { PullRequestContext } from "./context";
 import type { EarlierFinding } from "./summary";
 
+const MAX_REPLY_CHARS = 600;
+
+/** One earlier finding, with what people replied to it, as a line of a numbered list. */
+export function renderEarlierFinding(finding: EarlierFinding, label = "") {
+  const entry = [`${label}${finding.path}:${finding.line ?? "?"} ${finding.title}`, `   ${finding.body.replace(/\n+/g, " ")}`];
+  for (const reply of finding.replies) {
+    const text = reply.body.replace(/\s+/g, " ");
+    entry.push(`   Reply from @${reply.author}: ${text.length > MAX_REPLY_CHARS ? `${text.slice(0, MAX_REPLY_CHARS)}…` : text}`);
+  }
+  return entry.join("\n");
+}
+
 /** Context for checking whether a later head fixed earlier findings. */
 export function renderFollowUp(context: PullRequestContext, open: readonly EarlierFinding[], changes: string | null) {
-  const list = open.map((finding, index) => `${index}. ${finding.path}:${finding.line ?? "?"} ${finding.title}\n   ${finding.body.replace(/\n+/g, " ")}`).join("\n");
+  const list = open.map((finding, index) => `${index}. ${renderEarlierFinding(finding)}`).join("\n");
   return `## Earlier findings still open\n\n${list}\n\n## Changes since pipkin's last complete review\n\n${changes === null ? "No earlier complete review or comparison is available. Judge each finding against the current pull request." : `\`\`\`diff\n${changes}\n\`\`\``}\n\n## Current pull request\n\n${renderPullRequest(context)}`;
 }
 
@@ -53,6 +65,37 @@ export const FINDING_INSTRUCTIONS = `Report each issue as one finding with:
 - source: when the finding quotes a rule or requirement, where it comes from: the rules file path (for example AGENTS.md), "PR description", or "issue #N". Otherwise null. Never put code locations here.
 - suggestion: the exact replacement text for lines startLine..line (or just line), only when the fix is small, self-contained and you are certain of it. Give the complete new text of those lines with their original indentation, and nothing else. Use null when you are unsure or the fix reaches beyond those lines.
 Return an empty list when you find nothing worth reporting. Finding nothing is a normal, good outcome.`;
+
+/**
+ * What a review leaves alone: on a follow-up, lines pipkin already reviewed;
+ * always, findings people have already answered. Empty when neither applies.
+ */
+export function renderFollowUpScope(changes: string | null, discussed: readonly EarlierFinding[]) {
+  const parts: string[] = [];
+  if (changes !== null) {
+    parts.push(`## This is a follow-up review
+
+pipkin already reviewed an earlier commit of this pull request. Report only problems in the changes since that review, shown below. Use the full diff above for context, but do not report anything about lines these changes did not touch: they were already reviewed. A file whose patch is not shown changed in ways GitHub could not display; review it in full.
+
+\`\`\`diff
+${changes}
+\`\`\``);
+  }
+  if (discussed.length > 0) {
+    parts.push(`## Findings already discussed on this pull request
+
+Someone has replied to each of these. Do not report them again, or a variation of the same concern, whether the reply says it was fixed or that it is not a problem.
+
+${discussed.map((finding) => `- ${renderEarlierFinding(finding)}`).join("\n")}`);
+  }
+  return parts.join("\n\n");
+}
+
+/** Verifier guidance for findings people already answered. Empty when there are none. */
+export function renderDiscussedForVerifier(discussed: readonly EarlierFinding[]) {
+  if (discussed.length === 0) return "";
+  return `${renderFollowUpScope(null, discussed)}\n\nScore a candidate that repeats one of these, or is a narrow variation of it, at most 25.`;
+}
 
 export function renderPullRequest(context: PullRequestContext, options: { includeDiff?: boolean } = {}) {
   const parts = [

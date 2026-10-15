@@ -44,3 +44,38 @@ export function newSideText(patch: string | null, start: number, end: number) {
   }
   return text.join("\n");
 }
+
+/** How far from a changed line a finding may anchor and still count as being about that change. */
+const SCOPE_SLACK = 3;
+
+/**
+ * Whether a finding on lines start..end of a file is about the changes since
+ * pipkin's last review. A deletion counts at the new-side line where it was made,
+ * so a removed guard puts the lines around it in scope. A file missing from those
+ * changes was already reviewed; one whose patch GitHub omitted (too large or
+ * binary) counts as changed throughout.
+ */
+export function touchedSince(files: readonly { path: string; patch: string | null }[]) {
+  const added = new Map<string, number[] | null>();
+  for (const file of files) {
+    if (file.patch === null) {
+      added.set(file.path, null);
+      continue;
+    }
+    const lines: number[] = [];
+    let line = 0;
+    for (const row of file.patch.split("\n")) {
+      const header = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row);
+      if (header) line = Number(header[1]);
+      else if (row.startsWith("+")) lines.push(line++);
+      else if (row.startsWith("-")) lines.push(line);
+      else if (row.startsWith(" ")) line++;
+    }
+    added.set(file.path, lines);
+  }
+  return (path: string, start: number, end: number) => {
+    if (!added.has(path)) return false;
+    const lines = added.get(path);
+    return lines === null || lines === undefined || lines.some((line) => line >= start - SCOPE_SLACK && line <= end + SCOPE_SLACK);
+  };
+}

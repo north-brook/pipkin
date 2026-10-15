@@ -3,14 +3,17 @@ import { sleep } from "workflow";
 import { z } from "zod";
 import type { CheckConclusion } from "../lib/checks";
 import type { PullRequestContext } from "../lib/context";
-import { newSideText } from "../lib/diff";
+import { newSideText, touchedSince } from "../lib/diff";
 import type { Repo } from "../lib/github";
 import {
   CONFIDENCE_RUBRIC,
   FALSE_POSITIVES,
   FINDING_INSTRUCTIONS,
   SMELL_BASELINE,
+  renderDiscussedForVerifier,
+  renderEarlierFinding,
   renderFollowUp,
+  renderFollowUpScope,
   renderPullRequest,
   renderRulesFiles,
   renderSpec,
@@ -32,6 +35,10 @@ import {
 import { checkTitle, type EarlierFinding, headline, isIncomplete, type ReviewReport, type ScoredFinding } from "../lib/summary";
 
 const MIN_SCORE = Number(process.env.PIPKIN_MIN_SCORE ?? 80);
+/** From this many complete reviews of a pull request on, a finding needs a higher score. */
+const LATE_ROUND = 2;
+const LATE_MIN_SCORE = Number(process.env.PIPKIN_LATE_MIN_SCORE ?? 90);
+const MAX_POSTED_FINDINGS = Number(process.env.PIPKIN_MAX_FINDINGS ?? 5);
 const MAX_SCORED_FINDINGS = 40;
 const MAX_SUGGESTION_LINES = 8;
 
@@ -59,10 +66,10 @@ export default defineWorkflowTool({
     if (!input.force && (context.state !== "open" || context.draft)) return { posted: false, reason: `pull request is ${context.draft ? "a draft" : context.state}` };
     let checkId: number | null = null;
     try {
-      const previousHead = await lastReviewedHeadStep(repo, context.number);
-      if (!input.force && previousHead === context.headSha) return { posted: false, reason: "this head commit was already reviewed" };
+      const previous = await lastReviewedHeadStep(repo, context.number);
+      if (!input.force && previous.head === context.headSha) return { posted: false, reason: "this head commit was already reviewed" };
       checkId = await startCheckStep(repo, context.headSha, context.url, "Reviewing…", "Reading the pull request.");
-      return await review(ctx, repo, context, previousHead, checkId, input.force);
+      return await review(ctx, repo, context, previous, checkId, input.force);
     } catch (error) {
       // Leave the head unmarked so the next push or mention retries it.
       if (checkId === null) checkId = await startCheckStep(repo, context.headSha, context.url, "Review failed", "The review could not finish.");
@@ -79,10 +86,11 @@ async function review(
   ctx: WorkflowToolContext,
   repo: Repo,
   context: PullRequestContext,
-  previousHead: string | null,
+  previous: { head: string | null; count: number },
   checkId: number | null,
   force: boolean,
 ) {
+  const previousHead = previous.head;
   // 2. Triage.
   const triage = await ask(ctx, "triage", Triage, `${renderPullRequest(context)}\n\nDecide whether to review this pull request, and summarize what it changes in 2-3 sentences.`);
   if (!triage) throw new Error("triage did not return a result");
@@ -91,14 +99,27 @@ async function review(
     return { posted: false, reason: triage.reason };
   }
 
-  // 3. Reviewer-specific context, and what pipkin said about earlier commits.
-  const [extra, earlier] = await Promise.all([loadExtrasStep(context), loadEarlierFindingsStep(repo, context.number)]);
+  // 3. Reviewer-specific context, what pipkin said about earlier commits, and
+  // on a follow-up the changes since its last complete review.
+  const [extra, earlier, changes] = await Promise.all([
+    loadExtrasStep(context),
+    loadEarlierFindingsStep(repo, context.number),
+    previousHead === null || previousHead === context.headSha ? null : compareCommitsStep(repo, previousHead, context.headSha),
+  ]);
   const spec = renderSpec(context);
   const hasSpec = context.linkedIssues.length > 0 || context.body.trim().length >= 80;
+  // A follow-up looks for new problems only in what changed since the last review.
+  // A requested review, or one without a usable comparison (a force-push, a
+  // truncated diff), covers everything.
+  const scoped = !force && changes !== null && !changes.truncated ? changes : null;
+  const inScope = scoped === null ? null : touchedSince(scoped.files);
+  // A finding someone answered is settled, resolved or not; never raise it again.
+  const discussed = earlier.filter((finding) => finding.replies.length > 0);
+  const scope = renderFollowUpScope(scoped?.diff ?? null, discussed);
 
   // 4. Independent reviewers, in parallel, with the follow-up check alongside them.
   await updateCheckStep(repo, checkId, "Reviewing…", "Running the review passes.");
-  const shared = `${renderPullRequest(context)}\n\n${FALSE_POSITIVES}\n\n${FINDING_INSTRUCTIONS}`;
+  const shared = `${renderPullRequest(context)}\n\n${FALSE_POSITIVES}\n\n${FINDING_INSTRUCTIONS}${scope ? `\n\n${scope}` : ""}`;
   const prompts: Partial<Record<Reviewer, string>> = {
     rules: `${shared}\n\n## Rules files\n\n${renderRulesFiles(context)}\n\n## ${SMELL_BASELINE}`,
     bugs: shared,
@@ -111,19 +132,24 @@ async function review(
   const open = earlier.filter((finding) => !finding.resolved);
   const [results, fixed] = await Promise.all([
     Promise.all(ran.map((reviewer) => ask(ctx, reviewer, Findings, prompts[reviewer] as string))),
-    followUp(ctx, repo, context, previousHead, open),
+    followUp(ctx, context, changes?.diff ?? null, open),
   ]);
   const failedReviewers = ran.filter((_, index) => results[index] === undefined);
   // Never post an all-clear for passes that did not run; leave the head unreviewed so it is retried.
   if (failedReviewers.length === ran.length) throw new Error("every review pass failed");
-  const candidates = dedupe(
+  const proposed = dedupe(
     ran.flatMap((reviewer, index) => (results[index]?.findings ?? []).map((finding) => ({ ...finding, reviewer }))),
-  ).slice(0, MAX_SCORED_FINDINGS);
+  );
+  const inChanges = inScope === null ? proposed : proposed.filter((finding) => inScope(finding.path, finding.startLine ?? finding.line, finding.line));
+  const alreadyReviewed = proposed.length - inChanges.length;
+  const candidates = inChanges.slice(0, MAX_SCORED_FINDINGS);
 
   // 5. Independent confidence scoring; keep only high-confidence findings.
   await updateCheckStep(repo, checkId, "Reviewing…", `Verifying ${candidates.length} candidate finding${candidates.length === 1 ? "" : "s"}.`);
   const patches = new Map(context.files.map((file) => [file.path, file.patch]));
   const verifierBase = `${renderPullRequest(context)}\n\n## Rules files\n\n${renderRulesFiles(context)}${hasSpec ? `\n\n## Spec\n\n${spec}` : ""}\n\n${FALSE_POSITIVES}\n\n${CONFIDENCE_RUBRIC}`;
+  const discussedGuidance = renderDiscussedForVerifier(discussed);
+  const verifierPrompt = discussedGuidance ? `${verifierBase}\n\n${discussedGuidance}` : verifierBase;
   const withSuggestions = candidates.map((finding) => withReplacedLines(finding, patches.get(finding.path) ?? null));
   const scores = await Promise.all(
     withSuggestions.map(({ finding, replacedLines }) =>
@@ -131,14 +157,16 @@ async function review(
         ctx,
         "verifier",
         Score,
-        `${verifierBase}\n\n## Candidate finding (from the ${finding.reviewer} reviewer)\n\n${JSON.stringify({ ...finding, replacedLines }, null, 2)}`,
+        `${verifierPrompt}\n\n## Candidate finding (from the ${finding.reviewer} reviewer)\n\n${JSON.stringify({ ...finding, replacedLines }, null, 2)}`,
       ),
     ),
   );
   const unverified = withSuggestions.filter((_, index) => scores[index] === undefined);
+  // Later rounds keep finding thinner edge cases; raise the bar once a pull request has had its reviews.
+  const minScore = previous.count >= LATE_ROUND ? Math.max(MIN_SCORE, LATE_MIN_SCORE) : MIN_SCORE;
   const verified = withSuggestions
     .map(({ finding }, index) => ({ finding: { ...finding, score: scores[index]?.score ?? 0 } as ScoredFinding, suggestionOk: scores[index]?.suggestionOk === true }))
-    .filter(({ finding }) => finding.score >= MIN_SCORE);
+    .filter(({ finding }) => finding.score >= minScore);
   const dropped = candidates.length - verified.length - unverified.length;
 
   // 6. Recheck eligibility, then post one review and settle the check.
@@ -146,7 +174,12 @@ async function review(
   if (beforeCleanup) return { posted: false, reason: beforeCleanup };
   const resolved = new Set(await tidyEarlierReviewsStep(repo, context.number, [...fixed]));
   const stillOpen = open.filter((finding) => !resolved.has(finding.threadId));
-  const kept = await merge(ctx, verified, stillOpen);
+  // Answered findings count as already raised, resolved or not, so the merge drops repeats of them.
+  const raised = [...stillOpen, ...discussed.filter((finding) => finding.resolved || resolved.has(finding.threadId))];
+  const merged = await merge(ctx, verified, raised);
+  // Post the strongest few as threads; the rest are listed, collapsed, in the summary.
+  const ranked = [...merged].sort((a, b) => b.finding.score - a.finding.score);
+  const kept = ranked.slice(0, MAX_POSTED_FINDINGS);
   const beforePublish = await publishBlocker(repo, context, checkId, force);
   if (beforePublish) return { posted: false, reason: beforePublish };
   const report: ReviewReport = {
@@ -159,6 +192,9 @@ async function review(
     unverified: unverified.length,
     truncated: context.truncated,
     dropped,
+    alreadyReviewed,
+    heldBack: ranked.slice(MAX_POSTED_FINDINGS).map((entry) => entry.finding),
+    minScore,
     rereview: previousHead !== null || earlier.length > 0,
   };
   const posted = await publishReviewStep(context, report, kept.map((entry) => entry.suggestionOk));
@@ -177,6 +213,8 @@ async function review(
     resolvedEarlier: report.fixed.length,
     stillOpen: report.stillOpen.length,
     filtered: dropped,
+    alreadyReviewed,
+    heldBack: report.heldBack.length,
     failedReviewers,
   };
 }
@@ -213,10 +251,9 @@ function withReplacedLines(finding: Finding & { reviewer: Reviewer }, patch: str
 }
 
 /** Which of pipkin's open earlier findings this head commit fixed. */
-async function followUp(ctx: WorkflowToolContext, repo: Repo, context: PullRequestContext, previousHead: string | null, open: readonly EarlierFinding[]) {
+async function followUp(ctx: WorkflowToolContext, context: PullRequestContext, changes: string | null, open: readonly EarlierFinding[]) {
   const fixed = new Set<string>();
   if (open.length === 0) return fixed;
-  const changes = previousHead === null || previousHead === context.headSha ? null : await compareCommitsStep(repo, previousHead, context.headSha);
   const result = await ask(
     ctx,
     "followup",
@@ -269,18 +306,19 @@ interface Verified {
 
 /**
  * Collapses findings from different reviewers that describe the same problem,
- * and drops new findings that repeat one already open from an earlier review.
- * If the merge step fails, everything is kept rather than silently lost.
+ * and drops new findings that repeat one already raised in an earlier review:
+ * still open, or answered by a person. If the merge step fails, everything is
+ * kept rather than silently lost.
  */
-async function merge(ctx: WorkflowToolContext, findings: Verified[], stillOpen: readonly EarlierFinding[]) {
-  if (findings.length === 0 || (findings.length < 2 && stillOpen.length === 0)) return findings;
+async function merge(ctx: WorkflowToolContext, findings: Verified[], earlier: readonly EarlierFinding[]) {
+  if (findings.length === 0 || (findings.length < 2 && earlier.length === 0)) return findings;
   const entries = [
-    ...stillOpen.map((finding) => `[earlier] ${finding.path}:${finding.line ?? "?"} ${finding.title}\n   ${finding.body.replace(/\n+/g, " ")}`),
+    ...earlier.map((finding) => renderEarlierFinding(finding, "[earlier] ")),
     ...findings.map(({ finding }) => `[${finding.reviewer}] ${finding.path}:${finding.line} ${finding.title}\n   ${finding.body}`),
   ];
   const result = await ask(ctx, "merge", Groups, `Findings:\n\n${entries.map((entry, index) => `${index}. ${entry}`).join("\n")}`);
   if (!result) return findings;
-  const offset = stillOpen.length;
+  const offset = earlier.length;
   const keep = new Set<number>();
   const covered = new Set<number>();
   for (const group of result.groups) {

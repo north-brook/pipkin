@@ -20,7 +20,8 @@ pipkin would rather say nothing than post a false alarm. Six narrow reviewers lo
 
 - **One review per push.** Each finding is an inline comment on the line it is about, with a one-click suggested change when the fix is small and certain. The summary is a short verdict that links to each comment, grouped into Bugs, Standards and Spec.
 - **A `pipkin` check.** It shows progress while the review runs and links to the result. It concludes success when clean and neutral when there are findings or an incomplete review, so pipkin informs without blocking merges. Re-run it from the Checks tab to review again. For fork pull requests, GitHub may omit the check's pull request association, which eve requires for routing; comment `@pipkin-bot review` to re-run those reviews.
-- **Quiet follow-ups.** On a new push pipkin reviews again, resolves its own threads for findings the push fixed, does not repeat findings that are still open, and collapses its earlier summaries.
+- **Quiet follow-ups.** On a new push pipkin looks for new problems only in what changed since its last review, resolves its own threads for findings the push fixed, and collapses its earlier summaries. It does not repeat findings that are still open, and once you reply to a finding, whether to say it is fixed or that it is not a problem, it does not raise that concern again.
+- **Short reviews.** Each review posts at most five findings as threads, highest-scored first, and lists any others in the summary. From the third review of a pull request on, a finding needs a score of 90 instead of 80.
 - **Conversation.** Reply to a finding with `@pipkin` to ask about it or push back, or comment `@pipkin review` to run the review again.
 
 ## How it reviews
@@ -37,8 +38,8 @@ On every opened, reopened, ready-for-review, or pushed pull request:
    | `rules` | Violations of `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `CODING_STANDARDS.md`, plus a Fowler smell baseline | Standards |
    | `precedent` | Feedback from earlier PRs on the same files that applies again | Standards |
    | `spec` | Gaps against the PR description and linked issues (runs only when a spec exists) | Spec |
-3. **Verification**: a separate verifier scores each candidate 0–100. Anything under 80 is dropped.
-4. **Merge**: findings from different reviewers that describe the same problem are collapsed into one.
+3. **Verification**: a separate verifier scores each candidate 0–100. Anything under 80 is dropped (90 from the third review of a pull request on).
+4. **Merge**: findings from different reviewers that describe the same problem are collapsed into one, and so are new findings that repeat one already open or answered.
 5. **Follow-up**: on a new push, checks which of pipkin's open findings the push fixed, and resolves those threads.
 6. **One review**: a single GitHub review with inline comments and a short summary grouped by axis. Bugs, Standards, and Spec stay separate so one axis can't hide another.
 
@@ -100,6 +101,8 @@ Model calls that fail transiently (an overloaded provider, a rate limit) are ret
 | `PIPKIN_MODEL` | `gpt-6.1-sol` | Model for every pass (triage, reviewers, verifier, merge, follow-up) |
 | `PIPKIN_BOT_NAME` | `GITHUB_APP_SLUG` | The `@name` pipkin answers to in comments |
 | `PIPKIN_MIN_SCORE` | `80` | Verifier score a finding needs to be posted |
+| `PIPKIN_LATE_MIN_SCORE` | `90` | Score a finding needs from a pull request's third review on |
+| `PIPKIN_MAX_FINDINGS` | `5` | Findings posted as threads per review; the rest are listed in the summary |
 | `PIPKIN_DRY_RUN` | unset | `1` logs reviews and checks instead of posting them |
 | `PIPKIN_ADMIN_PASSWORD` | unset | Enables `eve remote connect` with user `pipkin` |
 

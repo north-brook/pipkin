@@ -26,6 +26,8 @@ export interface EarlierFinding {
   readonly body: string;
   readonly axis: Axis | null;
   readonly resolved: boolean;
+  /** Replies from people in the finding's thread, oldest first. */
+  readonly replies: readonly { author: string; body: string }[];
 }
 
 export interface ReviewReport {
@@ -43,6 +45,12 @@ export interface ReviewReport {
   /** Some of the diff was omitted from the review context. */
   readonly truncated: boolean;
   readonly dropped: number;
+  /** Candidates about lines pipkin already reviewed, left out of this follow-up. */
+  readonly alreadyReviewed: number;
+  /** Verified findings beyond this review's cap: listed in the summary, with no thread. */
+  readonly heldBack: readonly ScoredFinding[];
+  /** The confidence score a finding needed to be posted in this review. */
+  readonly minScore: number;
   /** pipkin reviewed an earlier commit of this pull request. */
   readonly rereview: boolean;
 }
@@ -131,6 +139,12 @@ export function renderReview(context: PullRequestContext, report: ReviewReport, 
     lines.push("");
   }
 
+  if (report.heldBack.length > 0) {
+    lines.push(`<details>`, `<summary>Lower-scored findings, not posted as threads (${report.heldBack.length})</summary>`, "");
+    for (const finding of report.heldBack) lines.push(`- **${cleanTitle(finding.title)}** · [\`${fileLabel(finding.path, finding.line)}\`](${blobLink(context, finding)})`);
+    lines.push("", `</details>`, "");
+  }
+
   if (report.stillOpen.length > 0) {
     lines.push(`<details>`, `<summary>Still open from earlier reviews (${report.stillOpen.length})</summary>`, "");
     for (const finding of report.stillOpen) lines.push(`- [${finding.title}](${finding.url}) · \`${fileLabel(finding.path, finding.line)}\``);
@@ -144,7 +158,8 @@ export function renderReview(context: PullRequestContext, report: ReviewReport, 
   if (!report.ranReviewers.includes("spec") && !report.failedReviewers.includes("spec")) {
     details.push("Skipped the spec pass: no description or linked issue to check against.");
   }
-  if (report.dropped > 0) details.push(`Filtered out ${plural(report.dropped, "lower-confidence candidate")}.`);
+  if (report.alreadyReviewed > 0) details.push(`Left out ${plural(report.alreadyReviewed, "candidate")} about lines an earlier review already covered.`);
+  if (report.dropped > 0) details.push(`Filtered out ${plural(report.dropped, "candidate")} scoring under ${report.minScore}.`);
   if (report.unverified > 0) details.push(`Held back ${plural(report.unverified, "candidate")} that could not be verified.`);
   if (context.truncated) details.push("The diff was too large to review in full; later files were not reviewed.");
   lines.push(`<details>`, `<summary>Review details</summary>`, "", ...details.map((detail) => `- ${detail}`), "", `</details>`, "");
