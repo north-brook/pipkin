@@ -91,6 +91,12 @@ ${discussed.map((finding) => `- ${renderEarlierFinding(finding)}`).join("\n")}`)
   return parts.join("\n\n");
 }
 
+/** Verifier guidance for findings people already answered. Empty when there are none. */
+export function renderDiscussedForVerifier(discussed: readonly EarlierFinding[]) {
+  if (discussed.length === 0) return "";
+  return `${renderFollowUpScope(null, discussed)}\n\nScore a candidate that repeats one of these, or is a narrow variation of it, at most 25.`;
+}
+
 export function renderPullRequest(context: PullRequestContext, options: { includeDiff?: boolean } = {}) {
   const parts = [
     `Repository: ${context.repo.owner}/${context.repo.repo}`,

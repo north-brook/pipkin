@@ -10,6 +10,7 @@ import {
   FALSE_POSITIVES,
   FINDING_INSTRUCTIONS,
   SMELL_BASELINE,
+  renderDiscussedForVerifier,
   renderEarlierFinding,
   renderFollowUp,
   renderFollowUpScope,
@@ -108,8 +109,9 @@ async function review(
   const spec = renderSpec(context);
   const hasSpec = context.linkedIssues.length > 0 || context.body.trim().length >= 80;
   // A follow-up looks for new problems only in what changed since the last review.
-  // Without a usable comparison (a force-push, a truncated diff) it reviews everything.
-  const scoped = changes !== null && !changes.truncated ? changes : null;
+  // A requested review, or one without a usable comparison (a force-push, a
+  // truncated diff), covers everything.
+  const scoped = !force && changes !== null && !changes.truncated ? changes : null;
   const inScope = scoped === null ? null : touchedSince(scoped.files);
   // A finding someone answered is settled, resolved or not; never raise it again.
   const discussed = earlier.filter((finding) => finding.replies.length > 0);
@@ -145,7 +147,9 @@ async function review(
   // 5. Independent confidence scoring; keep only high-confidence findings.
   await updateCheckStep(repo, checkId, "Reviewing…", `Verifying ${candidates.length} candidate finding${candidates.length === 1 ? "" : "s"}.`);
   const patches = new Map(context.files.map((file) => [file.path, file.patch]));
-  const verifierBase = `${renderPullRequest(context)}\n\n## Rules files\n\n${renderRulesFiles(context)}${hasSpec ? `\n\n## Spec\n\n${spec}` : ""}\n\n${FALSE_POSITIVES}\n\n${CONFIDENCE_RUBRIC}${discussed.length > 0 ? `\n\n${renderFollowUpScope(null, discussed)}\n\nScore a candidate that repeats one of these, or is a narrow variation of it, at most 25.` : ""}`;
+  const verifierBase = `${renderPullRequest(context)}\n\n## Rules files\n\n${renderRulesFiles(context)}${hasSpec ? `\n\n## Spec\n\n${spec}` : ""}\n\n${FALSE_POSITIVES}\n\n${CONFIDENCE_RUBRIC}`;
+  const discussedGuidance = renderDiscussedForVerifier(discussed);
+  const verifierPrompt = discussedGuidance ? `${verifierBase}\n\n${discussedGuidance}` : verifierBase;
   const withSuggestions = candidates.map((finding) => withReplacedLines(finding, patches.get(finding.path) ?? null));
   const scores = await Promise.all(
     withSuggestions.map(({ finding, replacedLines }) =>
@@ -153,7 +157,7 @@ async function review(
         ctx,
         "verifier",
         Score,
-        `${verifierBase}\n\n## Candidate finding (from the ${finding.reviewer} reviewer)\n\n${JSON.stringify({ ...finding, replacedLines }, null, 2)}`,
+        `${verifierPrompt}\n\n## Candidate finding (from the ${finding.reviewer} reviewer)\n\n${JSON.stringify({ ...finding, replacedLines }, null, 2)}`,
       ),
     ),
   );

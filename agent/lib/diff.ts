@@ -50,8 +50,10 @@ const SCOPE_SLACK = 3;
 
 /**
  * Whether a finding on lines start..end of a file is about the changes since
- * pipkin's last review. A file missing from those changes was already reviewed;
- * one whose patch GitHub omitted (too large or binary) counts as changed throughout.
+ * pipkin's last review. A deletion counts at the new-side line where it was made,
+ * so a removed guard puts the lines around it in scope. A file missing from those
+ * changes was already reviewed; one whose patch GitHub omitted (too large or
+ * binary) counts as changed throughout.
  */
 export function touchedSince(files: readonly { path: string; patch: string | null }[]) {
   const added = new Map<string, number[] | null>();
@@ -66,6 +68,7 @@ export function touchedSince(files: readonly { path: string; patch: string | nul
       const header = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row);
       if (header) line = Number(header[1]);
       else if (row.startsWith("+")) lines.push(line++);
+      else if (row.startsWith("-")) lines.push(line);
       else if (row.startsWith(" ")) line++;
     }
     added.set(file.path, lines);

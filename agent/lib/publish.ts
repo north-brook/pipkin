@@ -119,11 +119,18 @@ const COMPARE_FILE_LIMIT = 300;
 /**
  * The changes between two commits: each file's patch (null when GitHub omits it)
  * and a combined diff for prompts, cut at maxChars. Null when GitHub cannot
- * compare them (e.g. after a force-push) or the file list may be incomplete.
+ * compare them, base is not an ancestor of head (a force-push rewrote what was
+ * reviewed), or the file list may be incomplete.
  */
 export async function compareCommits(repo: Repo, base: string, head: string, maxChars: number) {
   try {
-    const comparison = await gh<{ files?: { filename: string; patch?: string }[] }>(repo, "GET", `${repoPath(repo)}/compare/${base}...${head}`);
+    const comparison = await gh<{ merge_base_commit?: { sha: string }; files?: { filename: string; patch?: string }[] }>(
+      repo,
+      "GET",
+      `${repoPath(repo)}/compare/${base}...${head}`,
+    );
+    // A three-dot compare diffs from the merge base, which is only "since base" when base is an ancestor.
+    if (comparison.merge_base_commit?.sha !== base) return null;
     const files = (comparison.files ?? []).map((file) => ({ path: file.filename, patch: file.patch ?? null }));
     if (files.length >= COMPARE_FILE_LIMIT) return null;
     const diff = files.map((file) => `diff --git a/${file.path} b/${file.path}\n${file.patch ?? "(binary or too large to display)"}`).join("\n");
