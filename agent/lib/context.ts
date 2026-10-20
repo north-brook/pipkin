@@ -92,6 +92,12 @@ interface FileResponse {
   previous_filename?: string;
 }
 
+/** A pull request's current head and state, in one request: enough to tell whether a running review is still worth finishing. */
+export async function loadPullRequestStatus(repo: Repo, number: number) {
+  const pull = await gh<PullResponse>(repo, "GET", `${repoPath(repo)}/pulls/${number}`);
+  return { headSha: pull.head.sha, state: pull.state, draft: pull.draft };
+}
+
 export async function loadPullRequest(repo: Repo, number: number): Promise<PullRequestContext> {
   const base = `${repoPath(repo)}/pulls/${number}`;
   const [pull, rawFiles, commits] = await Promise.all([

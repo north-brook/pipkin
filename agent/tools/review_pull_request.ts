@@ -25,6 +25,7 @@ import {
   lastReviewedHeadStep,
   loadEarlierFindingsStep,
   loadExtrasStep,
+  loadPullRequestStatusStep,
   loadPullRequestStep,
   publishReviewStep,
   resolveInstallationStep,
@@ -123,11 +124,16 @@ async function review(
   const discussed = earlier.filter((finding) => finding.replies.length > 0);
   const open = earlier.filter((finding) => !finding.resolved);
 
+  // A newer push or a move to draft makes this review worthless; stop at the next stage
+  // rather than spending every pass on it. The queued turn reviews the new head.
+  const stop = () => blocker(repo, context, checkId, force);
+
   // 4. Independent reviewers over each part of the diff, with the follow-up check alongside them.
-  const [runs, fixed] = await Promise.all([
-    reviewParts(ctx, repo, checkId, context, parts, { scoped, discussed, spec, hasSpec }),
+  const [{ runs, blocked }, fixed] = await Promise.all([
+    reviewParts(ctx, repo, checkId, context, parts, { scoped, discussed, spec, hasSpec }, stop),
     followUp(ctx, context, changes?.diff ?? null, open),
   ]);
+  if (blocked) return { posted: false, reason: blocked };
   const failedRuns = runs.filter((run) => run.findings === undefined);
   // Never post an all-clear for passes that did not run; leave the head unreviewed so it is retried.
   if (runs.length > 0 && failedRuns.length === runs.length) throw new Error("every review pass failed");
@@ -144,6 +150,8 @@ async function review(
   const candidates = inChanges.slice(0, MAX_SCORED_FINDINGS);
 
   // 5. Independent confidence scoring; keep only high-confidence findings.
+  const beforeScoring = await stop();
+  if (beforeScoring) return { posted: false, reason: beforeScoring };
   await updateCheckStep(repo, checkId, "Reviewing…", `Verifying ${candidates.length} candidate finding${candidates.length === 1 ? "" : "s"}.`);
   const patches = new Map(context.files.map((file) => [file.path, file.patch]));
   const discussedGuidance = renderDiscussedForVerifier(discussed);
@@ -172,7 +180,7 @@ async function review(
   const dropped = candidates.length - verified.length - unverified.length;
 
   // 6. Recheck eligibility, then post one review and settle the check.
-  const beforeCleanup = await publishBlocker(repo, context, checkId, force);
+  const beforeCleanup = await stop();
   if (beforeCleanup) return { posted: false, reason: beforeCleanup };
   const resolved = new Set(await tidyEarlierReviewsStep(repo, context.number, [...fixed]));
   const stillOpen = open.filter((finding) => !resolved.has(finding.threadId));
@@ -182,7 +190,7 @@ async function review(
   // Post the strongest few as threads; the rest are listed, collapsed, in the summary.
   const ranked = [...merged].sort((a, b) => b.finding.score - a.finding.score);
   const kept = ranked.slice(0, MAX_POSTED_FINDINGS);
-  const beforePublish = await publishBlocker(repo, context, checkId, force);
+  const beforePublish = await stop();
   if (beforePublish) return { posted: false, reason: beforePublish };
   const report: ReviewReport = {
     summary: triage.summary,
@@ -234,6 +242,7 @@ interface ReviewScope {
  * Runs every review pass over each part of the diff. Parts go one at a time so
  * a large pull request does not spend the model plan's rate limit all at once;
  * the passes within a part run in parallel. findings is undefined for a pass that failed.
+ * Before each part, stop() says whether the review is still wanted; blocked is its reason if not.
  */
 async function reviewParts(
   ctx: WorkflowToolContext,
@@ -242,9 +251,12 @@ async function reviewParts(
   context: PullRequestContext,
   parts: readonly DiffPart[],
   { scoped, discussed, spec, hasSpec }: ReviewScope,
+  stop: () => Promise<string | null>,
 ) {
   const runs: { reviewer: Reviewer; part: DiffPart; findings: Finding[] | undefined }[] = [];
   for (const [index, part] of parts.entries()) {
+    const blocked = await stop();
+    if (blocked) return { runs, blocked };
     const progress = parts.length > 1 ? ` (part ${index + 1} of ${parts.length})` : "";
     await updateCheckStep(repo, checkId, "Reviewing…", `Running the review passes${progress}.`);
     const extra = await loadExtrasStep(context, part.paths);
@@ -263,12 +275,12 @@ async function reviewParts(
     const results = await Promise.all(ran.map((reviewer) => ask(ctx, reviewer, Findings, prompts[reviewer] as string)));
     ran.forEach((reviewer, index) => runs.push({ reviewer, part, findings: results[index]?.findings }));
   }
-  return runs;
+  return { runs, blocked: null };
 }
 
-/** Stops cleanup or publication if the reviewed head is no longer eligible. */
-async function publishBlocker(repo: Repo, context: PullRequestContext, checkId: number | null, force: boolean) {
-  const latest = await loadPullRequestStep(repo, context.number);
+/** Why the review should stop if the reviewed head is no longer eligible, after cancelling the check; null to carry on. */
+async function blocker(repo: Repo, context: PullRequestContext, checkId: number | null, force: boolean) {
+  const latest = await loadPullRequestStatusStep(repo, context.number);
   if (latest.headSha !== context.headSha) {
     await finishCheckStep(repo, checkId, "cancelled", { title: "Superseded", summary: "A newer commit was pushed during the review." });
     return "a newer commit was pushed during the review";

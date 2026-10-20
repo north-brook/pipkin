@@ -4,6 +4,7 @@ import {
   loadHistory,
   loadPrecedent,
   loadPullRequest,
+  loadPullRequestStatus,
   type PullRequestContext,
 } from "./context";
 import { resolveInstallation, type Repo } from "./github";
@@ -27,6 +28,11 @@ const dryRun = () => process.env.PIPKIN_DRY_RUN === "1";
 export async function loadPullRequestStep(repo: Repo, number: number) {
   "use step";
   return loadPullRequest(repo, number);
+}
+
+export async function loadPullRequestStatusStep(repo: Repo, number: number) {
+  "use step";
+  return loadPullRequestStatus(repo, number);
 }
 
 export async function resolveInstallationStep(owner: string, repo: string, fromWebhook: string | readonly string[] | undefined) {
