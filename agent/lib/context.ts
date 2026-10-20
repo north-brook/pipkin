@@ -1,13 +1,20 @@
+import { matchesGlob } from "node:path";
 import { gh, ghAll, readFileAt, repoPath, type Repo } from "./github";
 
 // Everything the reviewers see is gathered here, up front, so each reviewer is
 // a pure prompt-in / findings-out call that needs no sandbox or GitHub access.
 
+// Lock files, build output and generated code are left out of every review. A
+// repository can mark more with linguist-generated or linguist-vendored in its
+// root .gitattributes.
 const SKIPPED_FILES = [
-  /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|go\.sum|poetry\.lock|Pipfile\.lock|uv\.lock|composer\.lock|Gemfile\.lock)$/,
+  /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|go\.sum|go\.work\.sum|Package\.resolved|\.terraform\.lock\.hcl)$/,
+  /\.(lock|lockb)$/,
   /\.(min\.js|min\.css|map|snap)$/,
-  /(^|\/)(dist|build|vendor|node_modules)\//,
+  /(\.generated\.\w+|\.g\.dart|\.pb\.go|_pb2(_grpc)?\.pyi?)$/,
+  /(^|\/)(dist|build|vendor|node_modules|__generated__)\//,
 ];
+const SKIPPED_ATTRIBUTES = ["linguist-generated", "linguist-vendored"];
 
 const RULES_FILE_NAMES = ["AGENTS.md", "CLAUDE.md"];
 const ROOT_STANDARDS_FILES = [
@@ -18,7 +25,6 @@ const ROOT_STANDARDS_FILES = [
   ".github/CONTRIBUTING.md",
 ];
 
-const MAX_PATCH_CHARS = 120_000;
 const MAX_FILE_CHARS = 40_000;
 const MAX_FILES_WITH_CONTENT = 25;
 const MAX_TOTAL_FILE_CHARS = 200_000;
@@ -34,6 +40,8 @@ export interface ChangedFile {
 
 export interface RulesFile {
   readonly path: string;
+  /** The directory whose files the rules govern; null for repository-wide documents. */
+  readonly scope: string | null;
   readonly url: string;
   readonly content: string;
 }
@@ -62,8 +70,6 @@ export interface PullRequestContext {
   readonly skippedFiles: readonly string[];
   readonly rulesFiles: readonly RulesFile[];
   readonly linkedIssues: readonly LinkedIssue[];
-  readonly diff: string;
-  readonly truncated: boolean;
 }
 
 interface PullResponse {
@@ -93,11 +99,12 @@ export async function loadPullRequest(repo: Repo, number: number): Promise<PullR
     ghAll<FileResponse>(repo, `${base}/files`),
     ghAll<{ commit: { message: string } }>(repo, `${base}/commits`),
   ]);
+  const generated = generatedPatterns(await readFileAt(repo, ".gitattributes", pull.base.sha));
 
   const files: ChangedFile[] = [];
   const skippedFiles: string[] = [];
   for (const file of rawFiles) {
-    if (SKIPPED_FILES.some((pattern) => pattern.test(file.filename))) {
+    if (SKIPPED_FILES.some((pattern) => pattern.test(file.filename)) || generated(file.filename)) {
       skippedFiles.push(file.filename);
       continue;
     }
@@ -109,17 +116,6 @@ export async function loadPullRequest(repo: Repo, number: number): Promise<PullR
       patch: file.patch ?? null,
       previousPath: file.previous_filename ?? null,
     });
-  }
-
-  let diff = "";
-  let truncated = false;
-  for (const file of files) {
-    const section = `diff --git a/${file.previousPath ?? file.path} b/${file.path}\n${file.patch ?? "(binary or too large to display)"}\n`;
-    if (diff.length + section.length > MAX_PATCH_CHARS) {
-      truncated = true;
-      break;
-    }
-    diff += section;
   }
 
   const commitMessages = commits.map((c) => c.commit.message);
@@ -145,9 +141,29 @@ export async function loadPullRequest(repo: Repo, number: number): Promise<PullR
     skippedFiles,
     rulesFiles,
     linkedIssues,
-    diff,
-    truncated,
   };
+}
+
+/**
+ * Whether the root .gitattributes marks a path as generated or vendored. Read at
+ * the base commit, like the rules files. The last matching line wins, as in git.
+ */
+function generatedPatterns(gitattributes: string | null) {
+  const rules: { glob: string; skip: boolean }[] = [];
+  for (const line of (gitattributes ?? "").split("\n")) {
+    const [pattern, ...attributes] = line.trim().split(/\s+/);
+    if (!pattern || pattern.startsWith("#")) continue;
+    for (const attribute of attributes) {
+      const name = attribute.replace(/^-/, "").replace(/=.*$/, "");
+      if (!SKIPPED_ATTRIBUTES.includes(name)) continue;
+      const skip = !attribute.startsWith("-") && !/=false$/.test(attribute);
+      // A pattern without a slash matches at any depth; one with a slash is relative to the root.
+      const anchored = pattern.replace(/\/$/, "/**");
+      const glob = anchored.includes("/") ? anchored.replace(/^\//, "") : `**/${anchored}`;
+      rules.push({ glob, skip });
+    }
+  }
+  return (path: string) => rules.filter((rule) => matchesGlob(path, rule.glob)).at(-1)?.skip ?? false;
 }
 
 /**
@@ -172,6 +188,7 @@ async function loadRulesFiles(repo: Repo, ref: string, files: readonly ChangedFi
         ? null
         : {
             path,
+            scope: RULES_FILE_NAMES.some((name) => path === name || path.endsWith(`/${name}`)) ? path.split("/").slice(0, -1).join("/") : null,
             url: `https://github.com/${repo.owner}/${repo.repo}/blob/${ref}/${path}`,
             content: content.slice(0, MAX_FILE_CHARS),
           };
@@ -208,8 +225,8 @@ async function loadLinkedIssues(repo: Repo, pullNumber: number, text: string): P
 }
 
 /** Full post-change contents of modified files, for reviewers that read comments in context. */
-export async function loadChangedFileContents(context: PullRequestContext) {
-  const targets = context.files.filter((file) => file.status !== "removed").slice(0, MAX_FILES_WITH_CONTENT);
+export async function loadChangedFileContents(context: PullRequestContext, files: readonly ChangedFile[]) {
+  const targets = files.filter((file) => file.status !== "removed").slice(0, MAX_FILES_WITH_CONTENT);
   const contents = await Promise.all(
     targets.map(async (file) => {
       const content = await readFileAt(context.repo, file.path, context.headSha);
@@ -273,8 +290,8 @@ interface BlameResponse {
  * Blame on the base revision for the lines each hunk touches, plus each file's
  * recent commit history. This is what the history reviewer reasons over.
  */
-export async function loadHistory(context: PullRequestContext) {
-  const modified = context.files.filter((file) => file.status === "modified" || file.status === "renamed").slice(0, 12);
+export async function loadHistory(context: PullRequestContext, files: readonly ChangedFile[]) {
+  const modified = files.filter((file) => file.status === "modified" || file.status === "renamed").slice(0, 12);
   const sections = await Promise.all(
     modified.map(async (file) => {
       const path = file.previousPath ?? file.path;
@@ -325,12 +342,11 @@ function touchedBaseLines(patch: string | null): [number, number][] {
  * Review comments left on earlier merged PRs that touched the same files.
  * Uses the commits API to find PRs per file, which works without code search.
  */
-export async function loadPrecedent(context: PullRequestContext) {
+export async function loadPrecedent(context: PullRequestContext, files: readonly ChangedFile[]) {
   const pullNumbers = new Set<number>();
   const shas = new Set<string>();
-  const files = context.files.filter((file) => file.status !== "added").slice(0, 8);
   await Promise.all(
-    files.map(async (file) => {
+    files.filter((file) => file.status !== "added").slice(0, 8).map(async (file) => {
       try {
         const commits = await gh<{ sha: string }[]>(
           context.repo,
@@ -358,7 +374,7 @@ export async function loadPrecedent(context: PullRequestContext) {
     }),
   );
 
-  const changedPaths = new Set(context.files.flatMap((file) => [file.path, file.previousPath ?? file.path]));
+  const changedPaths = new Set(files.flatMap((file) => [file.path, file.previousPath ?? file.path]));
   const sections = await Promise.all(
     [...pullNumbers].slice(0, 8).map(async (number) => {
       try {

@@ -42,8 +42,10 @@ export interface ReviewReport {
   readonly ranReviewers: readonly Reviewer[];
   readonly failedReviewers: readonly Reviewer[];
   readonly unverified: number;
-  /** Some of the diff was omitted from the review context. */
-  readonly truncated: boolean;
+  /** How many parts of the diff the passes reviewed; a large diff is split to fit them. */
+  readonly parts: number;
+  /** Changed files that did not fit, in full or in part, into the parts reviewed. */
+  readonly omitted: readonly string[];
   readonly dropped: number;
   /** Candidates about lines pipkin already reviewed, left out of this follow-up. */
   readonly alreadyReviewed: number;
@@ -54,6 +56,8 @@ export interface ReviewReport {
   /** pipkin reviewed an earlier commit of this pull request. */
   readonly rereview: boolean;
 }
+
+const MAX_LISTED_FILES = 10;
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : word.endsWith("s") ? "es" : "s"}`;
 
@@ -71,8 +75,12 @@ function blobLink(context: PullRequestContext, finding: Finding) {
   return `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${context.headSha}/${finding.path}#${range}`;
 }
 
+/**
+ * A pass failed or a candidate went unverified, so a retry could find more. Files
+ * too large to review are not retried: they would be just as large next time.
+ */
 export function isIncomplete(report: ReviewReport) {
-  return report.truncated || report.failedReviewers.length > 0 || report.unverified > 0;
+  return report.failedReviewers.length > 0 || report.unverified > 0;
 }
 
 export function headline(report: ReviewReport) {
@@ -86,6 +94,7 @@ export function checkTitle(report: ReviewReport) {
   const parts = [headline(report)];
   if (report.stillOpen.length > 0) parts.push(`${report.stillOpen.length} still open`);
   if (isIncomplete(report)) parts.push("incomplete");
+  else if (report.omitted.length > 0) parts.push(`${plural(report.omitted.length, "file")} not fully reviewed`);
   return parts.join(" · ");
 }
 
@@ -153,15 +162,27 @@ export function renderReview(context: PullRequestContext, report: ReviewReport, 
 
   const details: string[] = [];
   const passes = report.ranReviewers.length > 0 ? `: ${report.ranReviewers.join(", ")}` : "";
-  details.push(`Reviewed \`${context.headSha.slice(0, 7)}\` with ${plural(report.ranReviewers.length, "pass")}${passes}.`);
+  if (report.ranReviewers.length === 0 && report.failedReviewers.length === 0) {
+    details.push(`Only lock or generated files changed in \`${context.headSha.slice(0, 7)}\`${report.rereview ? " since pipkin's last review" : ""}, so no review passes ran.`);
+  } else {
+    const split = report.parts > 1 ? `, in ${report.parts} parts of the diff` : "";
+    details.push(`Reviewed \`${context.headSha.slice(0, 7)}\` with ${plural(report.ranReviewers.length, "pass")}${passes}${split}.`);
+  }
   if (report.fixed.length > 0) details.push(`Resolved ${plural(report.fixed.length, "earlier finding")} that this push fixed.`);
-  if (!report.ranReviewers.includes("spec") && !report.failedReviewers.includes("spec")) {
+  if (report.ranReviewers.length > 0 && !report.ranReviewers.includes("spec") && !report.failedReviewers.includes("spec")) {
     details.push("Skipped the spec pass: no description or linked issue to check against.");
   }
   if (report.alreadyReviewed > 0) details.push(`Left out ${plural(report.alreadyReviewed, "candidate")} about lines an earlier review already covered.`);
   if (report.dropped > 0) details.push(`Filtered out ${plural(report.dropped, "candidate")} scoring under ${report.minScore}.`);
   if (report.unverified > 0) details.push(`Held back ${plural(report.unverified, "candidate")} that could not be verified.`);
-  if (context.truncated) details.push("The diff was too large to review in full; later files were not reviewed.");
+  if (context.skippedFiles.length > 0) details.push(`Left out ${plural(context.skippedFiles.length, "lock or generated file")}.`);
+  if (report.omitted.length > 0) {
+    const shown = report.omitted.slice(0, MAX_LISTED_FILES).map((path) => `\`${path}\``).join(", ");
+    const more = report.omitted.length > MAX_LISTED_FILES ? `, and ${report.omitted.length - MAX_LISTED_FILES} more` : "";
+    details.push(
+      `Could not review all of ${plural(report.omitted.length, "file")}, too large for the review: ${shown}${more}. Mark generated files \`linguist-generated\` in \`.gitattributes\` and pipkin leaves them out.`,
+    );
+  }
   lines.push(`<details>`, `<summary>Review details</summary>`, "", ...details.map((detail) => `- ${detail}`), "", `</details>`, "");
 
   lines.push(`<sub>Reply with \`@${botName}\` to ask about a finding, or comment \`@${botName} review\` to run the review again.</sub>`);

@@ -79,3 +79,73 @@ export function touchedSince(files: readonly { path: string; patch: string | nul
     return lines === null || lines === undefined || lines.some((line) => line >= start - SCOPE_SLACK && line <= end + SCOPE_SLACK);
   };
 }
+
+/** Patches as one combined diff, for prompts. */
+export function renderPatches(files: readonly { path: string; patch: string | null }[]) {
+  return files.map((file) => `diff --git a/${file.path} b/${file.path}\n${file.patch ?? "(binary or too large to display)"}`).join("\n");
+}
+
+/** A slice of a pull request's diff small enough for one review pass. */
+export interface DiffPart {
+  readonly index: number;
+  readonly count: number;
+  /** Files with at least one hunk in this part. */
+  readonly paths: readonly string[];
+  readonly diff: string;
+  /** Some of the diff fit in no part. */
+  readonly partial: boolean;
+}
+
+/**
+ * Splits a diff into at most maxParts parts of at most maxChars each. Files are
+ * packed first-fit in order, so one that does not fit never stops the rest. A
+ * file too large for one part is split between hunks, and a hunk too large for
+ * one part is cut. Every file with something left out is listed in omitted.
+ */
+export function splitDiff(
+  files: readonly { path: string; patch: string | null; previousPath?: string | null }[],
+  maxChars: number,
+  maxParts: number,
+) {
+  const packed: { paths: string[]; diff: string }[] = [];
+  const omitted = new Set<string>();
+  for (const file of files) {
+    const header = `diff --git a/${file.previousPath ?? file.path} b/${file.path}\n`;
+    for (const piece of pieces(file.patch ?? "(binary or too large to display)", maxChars - header.length - 1)) {
+      if (piece.cut) omitted.add(file.path);
+      const section = `${header}${piece.text}\n`;
+      let part = packed.find((candidate) => candidate.diff.length + section.length <= maxChars);
+      if (!part && packed.length < maxParts) packed.push((part = { paths: [], diff: "" }));
+      if (!part) {
+        omitted.add(file.path);
+        continue;
+      }
+      part.diff += section;
+      if (!part.paths.includes(file.path)) part.paths.push(file.path);
+    }
+  }
+  const parts: DiffPart[] = packed.map((part, index) => ({ ...part, index, count: packed.length, partial: omitted.size > 0 }));
+  return { parts, omitted: [...omitted] };
+}
+
+/** A patch as runs of whole hunks of at most budget characters each; a longer hunk is cut. */
+function pieces(patch: string, budget: number) {
+  if (patch.length <= budget) return [{ text: patch, cut: false }];
+  const result: { text: string; cut: boolean }[] = [];
+  let run = "";
+  for (const hunk of patch.split(/\n(?=@@ )/)) {
+    if (run && run.length + 1 + hunk.length <= budget) {
+      run += `\n${hunk}`;
+      continue;
+    }
+    if (run) result.push({ text: run, cut: false });
+    run = hunk;
+    if (run.length > budget) {
+      const end = run.lastIndexOf("\n", budget);
+      result.push({ text: run.slice(0, end > 0 ? end : budget), cut: true });
+      run = "";
+    }
+  }
+  if (run) result.push({ text: run, cut: false });
+  return result;
+}
