@@ -1,4 +1,5 @@
 import type { PullRequestContext } from "./context";
+import type { DiffPart } from "./diff";
 import type { EarlierFinding } from "./summary";
 
 const MAX_REPLY_CHARS = 600;
@@ -13,10 +14,10 @@ export function renderEarlierFinding(finding: EarlierFinding, label = "") {
   return entry.join("\n");
 }
 
-/** Context for checking whether a later head fixed earlier findings. */
-export function renderFollowUp(context: PullRequestContext, open: readonly EarlierFinding[], changes: string | null) {
+/** Context for checking whether a later head fixed earlier findings; part holds the diff of the files they are on. */
+export function renderFollowUp(context: PullRequestContext, open: readonly EarlierFinding[], changes: string | null, part: DiffPart | null) {
   const list = open.map((finding, index) => `${index}. ${renderEarlierFinding(finding)}`).join("\n");
-  return `## Earlier findings still open\n\n${list}\n\n## Changes since pipkin's last complete review\n\n${changes === null ? "No earlier complete review or comparison is available. Judge each finding against the current pull request." : `\`\`\`diff\n${changes}\n\`\`\``}\n\n## Current pull request\n\n${renderPullRequest(context)}`;
+  return `## Earlier findings still open\n\n${list}\n\n## Changes since pipkin's last complete review\n\n${changes === null ? "No earlier complete review or comparison is available. Judge each finding against the current pull request." : `\`\`\`diff\n${changes}\n\`\`\``}\n\n## Current pull request\n\n${renderPullRequest(context, part)}`;
 }
 
 // The reviewer passes, false-positive list and confidence rubric are adapted
@@ -97,7 +98,8 @@ export function renderDiscussedForVerifier(discussed: readonly EarlierFinding[])
   return `${renderFollowUpScope(null, discussed)}\n\nScore a candidate that repeats one of these, or is a narrow variation of it, at most 25.`;
 }
 
-export function renderPullRequest(context: PullRequestContext, options: { includeDiff?: boolean } = {}) {
+/** The pull request with the diff of one part of it, or with no diff when part is null. */
+export function renderPullRequest(context: PullRequestContext, part: DiffPart | null) {
   const parts = [
     `Repository: ${context.repo.owner}/${context.repo.repo}`,
     `Pull request #${context.number}: ${context.title}`,
@@ -114,16 +116,26 @@ export function renderPullRequest(context: PullRequestContext, options: { includ
     ...context.files.map((file) => `- ${file.path} [${file.status}] +${file.additions} -${file.deletions}`),
   ];
   if (context.skippedFiles.length) parts.push(`Skipped generated/lock files: ${context.skippedFiles.join(", ")}`);
-  if (options.includeDiff !== false) {
-    parts.push("", "Diff:", "```diff", context.diff, "```");
-    if (context.truncated) parts.push("(The diff was truncated; review only what is shown.)");
+  if (part !== null) {
+    if (part.count > 1) {
+      parts.push(
+        "",
+        `This pull request is too large to review in one pass, so its diff is split into ${part.count} parts. This is part ${part.index + 1}. Changed files whose diff is not shown below are reviewed in another part. Do not report something as missing, such as an updated caller, a test or a requirement, when a changed file outside this part could contain it.`,
+      );
+    }
+    parts.push("", "Diff:", "```diff", part.diff, "```");
+    if (part.partial) parts.push("(Some of this pull request's diff was too large to include; review only what is shown.)");
   }
   return parts.join("\n");
 }
 
-export function renderRulesFiles(context: PullRequestContext) {
-  if (context.rulesFiles.length === 0) return "No rules files (AGENTS.md, CLAUDE.md, CONTRIBUTING.md, CODING_STANDARDS.md) were found.";
-  return context.rulesFiles
+/** The rules files that govern any of paths, or all of them when paths is omitted. */
+export function renderRulesFiles(context: PullRequestContext, paths?: readonly string[]) {
+  const files = context.rulesFiles.filter(
+    (file) => paths === undefined || !file.scope || paths.some((path) => path.startsWith(`${file.scope}/`)),
+  );
+  if (files.length === 0) return "No rules files (AGENTS.md, CLAUDE.md, CONTRIBUTING.md, CODING_STANDARDS.md) were found.";
+  return files
     .map((file) => `### ${file.path}\n${file.content}`)
     .join("\n\n");
 }

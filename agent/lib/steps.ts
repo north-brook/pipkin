@@ -50,12 +50,14 @@ export async function compareCommitsStep(repo: Repo, base: string, head: string)
   return compareCommits(repo, base, head, 60_000);
 }
 
-export async function loadExtrasStep(context: PullRequestContext) {
+/** History, precedent and post-change file contents for the changed files at paths. */
+export async function loadExtrasStep(context: PullRequestContext, paths: readonly string[]) {
   "use step";
+  const changed = context.files.filter((file) => paths.includes(file.path));
   const [history, precedent, files] = await Promise.all([
-    loadHistory(context),
-    loadPrecedent(context),
-    loadChangedFileContents(context),
+    loadHistory(context, changed),
+    loadPrecedent(context, changed),
+    loadChangedFileContents(context, changed),
   ]);
   return {
     history,

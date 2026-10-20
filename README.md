@@ -43,6 +43,8 @@ On every opened, reopened, ready-for-review, or pushed pull request:
 5. **Follow-up**: on a new push, checks which of pipkin's open findings the push fixed, and resolves those threads.
 6. **One review**: a single GitHub review with inline comments and a short summary grouped by axis. Bugs, Standards, and Spec stay separate so one axis can't hide another.
 
+**Large pull requests.** pipkin leaves lock files, build output and generated code out of every review; mark more with `linguist-generated` or `linguist-vendored` in your root `.gitattributes`. A diff too large for one pass is split into parts of about 120,000 characters, and every pass reviews each part. Past `PIPKIN_MAX_PARTS` parts, or for a single change too large for one part, the review lists the files it could not read in full.
+
 Model calls that fail transiently (an overloaded provider, a rate limit) are retried with backoff. If a pass still fails, the review says it is incomplete and pipkin tries again on the next push.
 
 ## Requirements
@@ -103,6 +105,7 @@ Model calls that fail transiently (an overloaded provider, a rate limit) are ret
 | `PIPKIN_MIN_SCORE` | `80` | Verifier score a finding needs to be posted |
 | `PIPKIN_LATE_MIN_SCORE` | `90` | Score a finding needs from a pull request's third review on |
 | `PIPKIN_MAX_FINDINGS` | `5` | Findings posted as threads per review; the rest are listed in the summary |
+| `PIPKIN_MAX_PARTS` | `8` | Parts a large diff is split into for review; each part costs one call per pass |
 | `PIPKIN_DRY_RUN` | unset | `1` logs reviews and checks instead of posting them |
 | `PIPKIN_ADMIN_PASSWORD` | unset | Enables `eve remote connect` with user `pipkin` |
 

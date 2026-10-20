@@ -1,5 +1,5 @@
 import type { PullRequestContext } from "./context";
-import { inlineAnchor } from "./diff";
+import { inlineAnchor, renderPatches } from "./diff";
 import { botLogin, gh, ghAll, graphql, repoPath, type Repo } from "./github";
 import { botName, botSlug } from "./identity";
 import {
@@ -133,7 +133,7 @@ export async function compareCommits(repo: Repo, base: string, head: string, max
     if (comparison.merge_base_commit?.sha !== base) return null;
     const files = (comparison.files ?? []).map((file) => ({ path: file.filename, patch: file.patch ?? null }));
     if (files.length >= COMPARE_FILE_LIMIT) return null;
-    const diff = files.map((file) => `diff --git a/${file.path} b/${file.path}\n${file.patch ?? "(binary or too large to display)"}`).join("\n");
+    const diff = renderPatches(files);
     return { files, diff: diff.slice(0, maxChars), truncated: diff.length > maxChars };
   } catch {
     return null;
