@@ -99,7 +99,8 @@ async function review(
   // 2. Triage.
   const triage = await ask(ctx, "triage", Triage, `${renderPullRequest(context, split.parts[0] ?? null)}\n\nDecide whether to review this pull request, and summarize what it changes in 2-3 sentences.`);
   if (!triage) throw new Error("triage did not return a result");
-  if (!force && !triage.review) {
+  // Triage reads only the first part, so it may skip only a pull request it saw in full.
+  if (!force && !triage.review && split.parts.length <= 1 && split.omitted.length === 0) {
     await finishCheckStep(repo, checkId, "skipped", { title: "Skipped", summary: triage.reason });
     return { posted: false, reason: triage.reason };
   }
@@ -117,7 +118,7 @@ async function review(
   // or one without a usable comparison (a force-push), covers everything.
   const scoped = !force && changes !== null ? changes : null;
   const inScope = scoped === null ? null : touchedSince(scoped.files);
-  const parts = scoped === null ? split.parts : split.parts.filter((part) => part.paths.some((path) => scoped.files.some((file) => file.path === path)));
+  const parts = inScope === null ? split.parts : split.parts.filter((part) => part.ranges.some((range) => inScope(range.path, range.start, range.end ?? Infinity)));
   // A finding someone answered is settled, resolved or not; never raise it again.
   const discussed = earlier.filter((finding) => finding.replies.length > 0);
   const open = earlier.filter((finding) => !finding.resolved);
@@ -300,18 +301,21 @@ function withReplacedLines(finding: Finding & { reviewer: Reviewer }, patch: str
 /** Which of pipkin's open earlier findings this head commit fixed. */
 async function followUp(ctx: WorkflowToolContext, context: PullRequestContext, changes: string | null, open: readonly EarlierFinding[]) {
   const fixed = new Set<string>();
-  if (open.length === 0) return fixed;
-  // The current diff of just the files the findings are on.
-  const onFiles = splitDiff(context.files.filter((file) => open.some((finding) => finding.path === file.path)), MAX_PART_CHARS, 1).parts[0] ?? null;
+  // The current diff of just the files the findings are on. A finding on a file
+  // that does not fit stays open: it cannot be judged fixed without its code.
+  const { parts, omitted } = splitDiff(context.files.filter((file) => open.some((finding) => finding.path === file.path)), MAX_PART_CHARS, 1);
+  const onFiles = parts[0] ?? null;
+  const judged = open.filter((finding) => !omitted.includes(finding.path));
+  if (judged.length === 0) return fixed;
   const result = await ask(
     ctx,
     "followup",
     FollowUp,
-    renderFollowUp(context, open, changes, onFiles),
+    renderFollowUp(context, judged, changes, onFiles),
   );
   if (!result) throw new Error("follow-up pass did not return a result");
   for (const entry of result.results) {
-    const finding = open[entry.index];
+    const finding = judged[entry.index];
     if (finding && entry.fixed) fixed.add(finding.threadId);
   }
   return fixed;

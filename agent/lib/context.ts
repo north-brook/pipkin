@@ -11,7 +11,7 @@ const SKIPPED_FILES = [
   /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|go\.sum|go\.work\.sum|Package\.resolved|\.terraform\.lock\.hcl)$/,
   /\.(lock|lockb)$/,
   /\.(min\.js|min\.css|map|snap)$/,
-  /(\.generated\.\w+|\.g\.dart|\.pb\.go|_pb2(_grpc)?\.pyi?)$/,
+  /(\.generated\.[\w.]+|\.g\.dart|\.pb\.go|_pb2(_grpc)?\.pyi?)$/,
   /(^|\/)(dist|build|vendor|node_modules|__generated__)\//,
 ];
 const SKIPPED_ATTRIBUTES = ["linguist-generated", "linguist-vendored"];
@@ -146,10 +146,11 @@ export async function loadPullRequest(repo: Repo, number: number): Promise<PullR
 
 /**
  * Whether the root .gitattributes marks a path as generated or vendored. Read at
- * the base commit, like the rules files. The last matching line wins, as in git.
+ * the base commit, like the rules files. As in git, each attribute takes the value
+ * of the last line that sets it for the path.
  */
 function generatedPatterns(gitattributes: string | null) {
-  const rules: { glob: string; skip: boolean }[] = [];
+  const rules: { glob: string; attribute: string; skip: boolean }[] = [];
   for (const line of (gitattributes ?? "").split("\n")) {
     const [pattern, ...attributes] = line.trim().split(/\s+/);
     if (!pattern || pattern.startsWith("#")) continue;
@@ -160,10 +161,11 @@ function generatedPatterns(gitattributes: string | null) {
       // A pattern without a slash matches at any depth; one with a slash is relative to the root.
       const anchored = pattern.replace(/\/$/, "/**");
       const glob = anchored.includes("/") ? anchored.replace(/^\//, "") : `**/${anchored}`;
-      rules.push({ glob, skip });
+      rules.push({ glob, attribute: name, skip });
     }
   }
-  return (path: string) => rules.filter((rule) => matchesGlob(path, rule.glob)).at(-1)?.skip ?? false;
+  return (path: string) =>
+    SKIPPED_ATTRIBUTES.some((attribute) => rules.filter((rule) => rule.attribute === attribute && matchesGlob(path, rule.glob)).at(-1)?.skip ?? false);
 }
 
 /**

@@ -91,6 +91,8 @@ export interface DiffPart {
   readonly count: number;
   /** Files with at least one hunk in this part. */
   readonly paths: readonly string[];
+  /** The new-side lines of each file this part covers; null end means the whole file. */
+  readonly ranges: readonly { path: string; start: number; end: number | null }[];
   readonly diff: string;
   /** Some of the diff fit in no part. */
   readonly partial: boolean;
@@ -107,7 +109,7 @@ export function splitDiff(
   maxChars: number,
   maxParts: number,
 ) {
-  const packed: { paths: string[]; diff: string }[] = [];
+  const packed: { paths: string[]; ranges: DiffPart["ranges"][number][]; diff: string }[] = [];
   const omitted = new Set<string>();
   for (const file of files) {
     const header = `diff --git a/${file.previousPath ?? file.path} b/${file.path}\n`;
@@ -115,17 +117,24 @@ export function splitDiff(
       if (piece.cut) omitted.add(file.path);
       const section = `${header}${piece.text}\n`;
       let part = packed.find((candidate) => candidate.diff.length + section.length <= maxChars);
-      if (!part && packed.length < maxParts) packed.push((part = { paths: [], diff: "" }));
+      if (!part && packed.length < maxParts) packed.push((part = { paths: [], ranges: [], diff: "" }));
       if (!part) {
         omitted.add(file.path);
         continue;
       }
       part.diff += section;
+      part.ranges.push({ path: file.path, ...newSideRange(file.patch === null ? null : piece.text) });
       if (!part.paths.includes(file.path)) part.paths.push(file.path);
     }
   }
   const parts: DiffPart[] = packed.map((part, index) => ({ ...part, index, count: packed.length, partial: omitted.size > 0 }));
   return { parts, omitted: [...omitted] };
+}
+
+/** The new-side lines a run of hunks spans; the whole file when there are no hunks to read. */
+function newSideRange(patch: string | null) {
+  const lines = [...newSideLines(patch).keys()];
+  return lines.length === 0 ? { start: 1, end: null } : { start: Math.min(...lines), end: Math.max(...lines) };
 }
 
 /** A patch as runs of whole hunks of at most budget characters each; a longer hunk is cut. */

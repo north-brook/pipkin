@@ -57,8 +57,6 @@ export interface ReviewReport {
   readonly rereview: boolean;
 }
 
-const MAX_LISTED_FILES = 10;
-
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : word.endsWith("s") ? "es" : "s"}`;
 
 export function cleanTitle(title: string) {
@@ -163,7 +161,8 @@ export function renderReview(context: PullRequestContext, report: ReviewReport, 
   const details: string[] = [];
   const passes = report.ranReviewers.length > 0 ? `: ${report.ranReviewers.join(", ")}` : "";
   if (report.ranReviewers.length === 0 && report.failedReviewers.length === 0) {
-    details.push(`Only lock or generated files changed in \`${context.headSha.slice(0, 7)}\`${report.rereview ? " since pipkin's last review" : ""}, so no review passes ran.`);
+    const reason = context.files.length === 0 ? "This pull request only changes lock or generated files" : "None of this pull request's changes since pipkin's last review need a new pass";
+    details.push(`${reason}, so no review passes ran on \`${context.headSha.slice(0, 7)}\`.`);
   } else {
     const split = report.parts > 1 ? `, in ${report.parts} parts of the diff` : "";
     details.push(`Reviewed \`${context.headSha.slice(0, 7)}\` with ${plural(report.ranReviewers.length, "pass")}${passes}${split}.`);
@@ -177,13 +176,14 @@ export function renderReview(context: PullRequestContext, report: ReviewReport, 
   if (report.unverified > 0) details.push(`Held back ${plural(report.unverified, "candidate")} that could not be verified.`);
   if (context.skippedFiles.length > 0) details.push(`Left out ${plural(context.skippedFiles.length, "lock or generated file")}.`);
   if (report.omitted.length > 0) {
-    const shown = report.omitted.slice(0, MAX_LISTED_FILES).map((path) => `\`${path}\``).join(", ");
-    const more = report.omitted.length > MAX_LISTED_FILES ? `, and ${report.omitted.length - MAX_LISTED_FILES} more` : "";
     details.push(
-      `Could not review all of ${plural(report.omitted.length, "file")}, too large for the review: ${shown}${more}. Mark generated files \`linguist-generated\` in \`.gitattributes\` and pipkin leaves them out.`,
+      `Could not review all of ${plural(report.omitted.length, "file")}, too large for the review; they are listed below. Mark generated files \`linguist-generated\` in \`.gitattributes\` and pipkin leaves them out.`,
     );
   }
   lines.push(`<details>`, `<summary>Review details</summary>`, "", ...details.map((detail) => `- ${detail}`), "", `</details>`, "");
+  if (report.omitted.length > 0) {
+    lines.push(`<details>`, `<summary>Not fully reviewed (${report.omitted.length})</summary>`, "", ...report.omitted.map((path) => `- \`${path}\``), "", `</details>`, "");
+  }
 
   lines.push(`<sub>Reply with \`@${botName}\` to ask about a finding, or comment \`@${botName} review\` to run the review again.</sub>`);
   return lines.join("\n").trimEnd();
